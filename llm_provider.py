@@ -84,3 +84,29 @@ class OllamaProvider:
         except Exception as e:
             print(f"Ollama连接失败: {e}")
             return False
+
+    def chat_with_history(self, query: str, history: List[Dict[str, str]]) -> str:
+        """多轮对话
+
+        Args:
+            query: 当前问题
+            history: 对话历史，格式为 [{"role": "user"/"assistant", "content": "..."}]
+
+        Returns:
+            模型回复
+        """
+        messages = []
+
+        # 添加历史消息
+        for msg in history:
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            else:
+                from langchain_core.messages import AIMessage
+                messages.append(AIMessage(content=msg["content"]))
+
+        # 添加当前问题
+        messages.append(HumanMessage(content=query))
+
+        response = self.chat_model.invoke(messages)
+        return response.content

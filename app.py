@@ -30,6 +30,9 @@ from config import (
 )
 
 app = Flask(__name__)
+# 禁用模板缓存，确保每次都重新加载
+app.jinja_env.auto_reload = True
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SECRET_KEY'] = 'rag-test-case-generator'
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 最大50MB
 
@@ -61,11 +64,18 @@ def index():
 def build_kb():
     """构建知识库"""
     try:
+        # 获取 rebuild 参数
+        rebuild = request.args.get('rebuild', 'false').lower() == 'true'
+        force_rebuild = rebuild  # true = 全量构建, false = 增量构建
+
         kb = get_knowledge_base()
-        success = kb.build_knowledge_base(force_rebuild=True)
+        mode = "全量" if force_rebuild else "增量"
+        print(f"开始{mode}构建知识库...")
+
+        success = kb.build_knowledge_base(force_rebuild=force_rebuild)
 
         if success:
-            return jsonify({'status': 'success', 'message': '知识库构建成功！'})
+            return jsonify({'status': 'success', 'message': f'知识库{mode}构建成功！'})
         else:
             return jsonify({'status': 'error', 'message': '知识库构建失败，请检查文档目录'})
     except Exception as e:
@@ -88,29 +98,96 @@ def check_llm():
 @app.route('/generate', methods=['POST'])
 def generate():
     """生成测试用例"""
+    print("=" * 50)
+    print("开始处理 /generate 请求")
     try:
         data = request.get_json()
+        print(f"接收到的数据: {data}")
+
+        if not data:
+            return jsonify({'status': 'error', 'message': '无效的请求数据'})
+
         query = data.get('query', '').strip()
+        num_cases = int(data.get('num_cases', 10))
+
+        print(f"query: {query}, num_cases: {num_cases}")
 
         if not query:
             return jsonify({'status': 'error', 'message': '请输入查询内容'})
 
+        print("获取知识库...")
         kb = get_knowledge_base()
+        print(f"知识库对象: {kb}")
 
         # 检查知识库是否已构建
-        if not kb.load_knowledge_base():
+        load_result = kb.load_knowledge_base()
+        print(f"load_knowledge_base 结果: {load_result}")
+
+        if not load_result:
             return jsonify({'status': 'error', 'message': '知识库未构建，请先构建知识库'})
 
-        # 生成测试用例
-        result = kb.query(query, return_context=True)
+        print(f"开始生成测试用例，num_cases={num_cases}...")
+        # 生成测试用例（支持批量）
+        try:
+            result = kb.query(query, return_context=True, num_cases=num_cases)
+        except Exception as query_error:
+            print(f"kb.query 发生错误: {query_error}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'status': 'error', 'message': f'生成测试用例失败: {str(query_error)}'})
 
+        print(f"生成完成，结果类型: {type(result)}")
+
+        # 确保 result 是可序列化的字典 - 使用安全转换
+        result_data = {}
+        try:
+            if isinstance(result, dict):
+                content_val = result.get('content')
+                filepath_val = result.get('filepath')
+
+                # 强制转换为字符串
+                content_str = ''
+                if content_val is not None:
+                    content_str = str(content_val)
+
+                filepath_str = ''
+                if filepath_val is not None:
+                    filepath_str = str(filepath_val)
+
+                result_data = {
+                    'content': content_str,
+                    'filepath': filepath_str
+                }
+            else:
+                result_data = {
+                    'content': str(result) if result else '',
+                    'filepath': ''
+                }
+        except Exception as e:
+            print(f"序列化错误: {e}")
+            result_data = {
+                'content': str(result),
+                'filepath': ''
+            }
+
+        content_len = len(result_data.get('content', ''))
+        print(f"返回数据 content 长度: {content_len}")
+        print("=" * 50)
+
+        # 确保返回的JSON包含正确的字段
         return jsonify({
             'status': 'success',
             'message': '测试用例生成成功',
-            'result': result
+            'data': {
+                'content': result_data['content'],
+                'filepath': result_data['filepath']
+            }
         })
 
     except Exception as e:
+        import traceback
+        print(f"生成失败: {e}")
+        traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)})
 
 

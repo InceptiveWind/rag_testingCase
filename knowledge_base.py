@@ -29,12 +29,17 @@ from config import (
     MAX_TOKENS,
     ENABLE_PREPROCESSOR,
     ENABLE_LLM_TAG,
+    USE_HYBRID_RETRIEVAL,
+    USE_RERANK,
+    VECTOR_WEIGHT,
+    BM25_WEIGHT,
+    RERANK_TOP_K,
 )
 from document_loader import DocumentLoader
 from document_preprocessor import DocumentPreprocessor
 from text_splitter import TextSplitter
 from vector_store import VectorStoreManager
-from retriever import Retriever
+from retriever import Retriever, AdvancedRetriever
 from case_generator import TestCaseGenerator
 
 
@@ -91,6 +96,7 @@ class KnowledgeBase:
         )
 
         self.retriever: Optional[Retriever] = None
+        self.advanced_retriever: Optional[AdvancedRetriever] = None
 
     def build_knowledge_base(self, force_rebuild: bool = False):
         """构建知识库"""
@@ -141,7 +147,12 @@ class KnowledgeBase:
                 print("知识库已是最新，无需更新")
                 self.retriever = Retriever(
                     existing_store,
-                    top_k=self.config.get('top_k', TOP_K)
+                    top_k=self.config.get('top_k', TOP_K),
+                    use_hybrid=self.config.get('use_hybrid_retrieval', USE_HYBRID_RETRIEVAL),
+                    use_rerank=self.config.get('use_rerank', USE_RERANK),
+                    vector_weight=self.config.get('vector_weight', VECTOR_WEIGHT),
+                    bm25_weight=self.config.get('bm25_weight', BM25_WEIGHT),
+                    rerank_top_k=self.config.get('rerank_top_k', RERANK_TOP_K)
                 )
                 return True
 
@@ -175,7 +186,12 @@ class KnowledgeBase:
         # 创建检索器
         self.retriever = Retriever(
             vectorstore,
-            top_k=self.config.get('top_k', TOP_K)
+            top_k=self.config.get('top_k', TOP_K),
+            use_hybrid=self.config.get('use_hybrid_retrieval', USE_HYBRID_RETRIEVAL),
+            use_rerank=self.config.get('use_rerank', USE_RERANK),
+            vector_weight=self.config.get('vector_weight', VECTOR_WEIGHT),
+            bm25_weight=self.config.get('bm25_weight', BM25_WEIGHT),
+            rerank_top_k=self.config.get('rerank_top_k', RERANK_TOP_K)
         )
 
         print("知识库构建完成！")
@@ -183,20 +199,29 @@ class KnowledgeBase:
 
     def load_knowledge_base(self) -> bool:
         """加载已存在的知识库"""
+        # 如果已经加载过且retriever存在，直接返回
+        if self.retriever is not None:
+            return True
+
         vectorstore = self.vector_manager.load_vectorstore()
 
         if vectorstore:
             self.retriever = Retriever(
                 vectorstore,
-                top_k=self.config.get('top_k', TOP_K)
+                top_k=self.config.get('top_k', TOP_K),
+                use_hybrid=self.config.get('use_hybrid_retrieval', USE_HYBRID_RETRIEVAL),
+                use_rerank=self.config.get('use_rerank', USE_RERANK),
+                vector_weight=self.config.get('vector_weight', VECTOR_WEIGHT),
+                bm25_weight=self.config.get('bm25_weight', BM25_WEIGHT),
+                rerank_top_k=self.config.get('rerank_top_k', RERANK_TOP_K)
             )
             return True
 
         return False
 
-    def query(self, query_text: str, return_context: bool = True):
+    def query(self, query_text: str, return_context: bool = True, num_cases: int = 10):
         """查询并生成测试用例"""
-        # 确保知识库已加载
+        # 确保知识库已加载（如果已经加载过，load_knowledge_base会直接返回True）
         if not self.load_knowledge_base():
             raise ValueError("知识库未构建，请先运行 --build")
 
@@ -206,10 +231,14 @@ class KnowledgeBase:
         if return_context:
             self.retriever.print_retrieved_docs(context_docs)
 
-        # 生成测试用例
-        result = self.test_generator.generate_and_save(query_text, context_docs)
+        # 生成测试用例（支持批量）
+        result = self.test_generator.generate(query_text, context_docs, num_cases=num_cases)
+        filepath = self.test_generator.save_to_file(result)
 
-        return result
+        return {
+            'content': result,
+            'filepath': str(filepath)
+        }
 
     def check_llm_connection(self) -> bool:
         """检查LLM服务连接"""
@@ -264,3 +293,157 @@ class KnowledgeBase:
         self.vector_manager.add_documents(chunks)
 
         print("文档添加完成")
+
+    def _init_advanced_retriever(self):
+        """初始化高级检索器"""
+        if not self.retriever:
+            self.load_knowledge_base()
+
+        if self.advanced_retriever:
+            return
+
+        self.advanced_retriever = AdvancedRetriever(
+            base_retriever=self.retriever,
+            llm_provider=self.llm_provider,
+            top_k=self.config.get('top_k', TOP_K),
+            rerank_top_k=self.config.get('rerank_top_k', RERANK_TOP_K)
+        )
+        print("高级检索器初始化完成")
+
+    def query_with_rewrite(self, query_text: str, return_context: bool = True, num_cases: int = 10):
+        """使用查询改写进行检索
+
+        Args:
+            query_text: 查询文本
+            return_context: 是否打印检索到的文档
+            num_cases: 生成的测试用例数量
+
+        Returns:
+            包含结果的文件路径
+        """
+        self._init_advanced_retriever()
+
+        # 使用多路召回
+        context_docs = self.advanced_retriever.multi_query_retrieve(query_text)
+
+        if return_context:
+            self.retriever.print_retrieved_docs(context_docs)
+
+        result = self.test_generator.generate(query_text, context_docs, num_cases=num_cases)
+        filepath = self.test_generator.save_to_file(result)
+
+        return {
+            'content': result,
+            'filepath': str(filepath)
+        }
+
+    def query_with_filter(
+        self,
+        query_text: str,
+        filter: dict,
+        return_context: bool = True,
+        num_cases: int = 10
+    ):
+        """使用元数据过滤进行检索
+
+        Args:
+            query_text: 查询文本
+            filter: 过滤条件，如 {"source": "xxx", "doc_type": "xxx"}
+            return_context: 是否打印检索到的文档
+            num_cases: 生成的测试用例数量
+
+        Returns:
+            包含结果的文件路径
+        """
+        self._init_advanced_retriever()
+
+        context_docs = self.advanced_retriever.retrieve_with_filter(query_text, filter=filter)
+
+        if return_context:
+            self.retriever.print_retrieved_docs(context_docs)
+
+        result = self.test_generator.generate(query_text, context_docs, num_cases=num_cases)
+        filepath = self.test_generator.save_to_file(result)
+
+        return {
+            'content': result,
+            'filepath': str(filepath)
+        }
+
+    def query_with_context(
+        self,
+        query_text: str,
+        history: list,
+        return_context: bool = True,
+        num_cases: int = 10
+    ):
+        """使用多轮对话上下文进行检索
+
+        Args:
+            query_text: 当前查询文本
+            history: 对话历史，格式为 [{"role": "user"/"assistant", "content": "..."}]
+            return_context: 是否打印检索到的文档
+            num_cases: 生成的测试用例数量
+
+        Returns:
+            包含结果的文件路径
+        """
+        self._init_advanced_retriever()
+
+        context_docs = self.advanced_retriever.retrieve_with_context(query_text, history=history)
+
+        if return_context:
+            self.retriever.print_retrieved_docs(context_docs)
+
+        result = self.test_generator.generate(query_text, context_docs, num_cases=num_cases)
+        filepath = self.test_generator.save_to_file(result)
+
+        return {
+            'content': result,
+            'filepath': str(filepath)
+        }
+
+    def advanced_query(
+        self,
+        query_text: str,
+        history: list = None,
+        filter: dict = None,
+        use_multi_query: bool = True,
+        use_parent: bool = False,
+        return_context: bool = True,
+        num_cases: int = 10
+    ):
+        """高级检索 - 综合使用多种检索策略
+
+        Args:
+            query_text: 查询文本
+            history: 对话历史
+            filter: 元数据过滤条件
+            use_multi_query: 是否使用多路召回
+            use_parent: 是否使用父文档召回
+            return_context: 是否打印检索到的文档
+            num_cases: 生成的测试用例数量
+
+        Returns:
+            包含结果的文件路径
+        """
+        self._init_advanced_retriever()
+
+        context_docs = self.advanced_retriever.advanced_retrieve(
+            query_text,
+            history=history,
+            filter=filter,
+            use_multi_query=use_multi_query,
+            use_parent=use_parent
+        )
+
+        if return_context:
+            self.retriever.print_retrieved_docs(context_docs)
+
+        result = self.test_generator.generate(query_text, context_docs, num_cases=num_cases)
+        filepath = self.test_generator.save_to_file(result)
+
+        return {
+            'content': result,
+            'filepath': str(filepath)
+        }

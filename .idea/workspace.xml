@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="知识库创建">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/rag_testing_case.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/rag_testing_case.iml" afterDir="false" />
+    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="增加支持文档">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/case_generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/case_generator.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/document_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/document_loader.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/knowledge_base.py" beforeDir="false" afterPath="$PROJECT_DIR$/knowledge_base.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/llm_provider.py" beforeDir="false" afterPath="$PROJECT_DIR$/llm_provider.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/retriever.py" beforeDir="false" afterPath="$PROJECT_DIR$/retriever.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -28,20 +27,25 @@
     </option>
   </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="master" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "InceptiveWind"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;InceptiveWind&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/InceptiveWind/rag_testingCase.git",
-    "accountId": "0e85c3f1-1068-4995-9634-9c374bba4e2d"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/InceptiveWind/rag_testingCase.git&quot;,
+    &quot;accountId&quot;: &quot;0e85c3f1-1068-4995-9634-9c374bba4e2d&quot;
   }
-}]]></component>
+}</component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 1
 }</component>
@@ -57,13 +61,19 @@
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "git-widget-placeholder": "master",
+    "git-widget-placeholder": "gaixie",
     "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "D:/Users/00795521/PycharmProjects/rag_testingCase/docs",
     "nodejs_package_manager_path": "npm",
     "settings.editor.selected.configurable": "http.proxy",
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\Users\00795521\PycharmProjects\rag_testingCase\docs" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -80,7 +90,8 @@
       <option name="presentableId" value="Default" />
       <updated>1773670218774</updated>
       <workItem from="1773670219793" duration="5378000" />
-      <workItem from="1773706579540" duration="18394000" />
+      <workItem from="1773706579540" duration="29755000" />
+      <workItem from="1773744094073" duration="1157000" />
     </task>
     <task id="LOCAL-00001" summary="知识库创建">
       <option name="closed" value="true" />
@@ -98,7 +109,15 @@
       <option name="project" value="LOCAL" />
       <updated>1773675488384</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="增加支持文档">
+      <option name="closed" value="true" />
+      <created>1773728903591</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1773728903591</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -106,6 +125,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="知识库创建" />
-    <option name="LAST_COMMIT_MESSAGE" value="知识库创建" />
+    <MESSAGE value="增加支持文档" />
+    <option name="LAST_COMMIT_MESSAGE" value="增加支持文档" />
   </component>
 </project>
