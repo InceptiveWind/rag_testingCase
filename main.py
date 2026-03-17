@@ -4,6 +4,15 @@ RAG测试用例生成器 - 主程序入口
 
 import argparse
 import sys
+import os
+
+# 设置环境变量解决可能的兼容性问题
+os.environ['TOKENIZERS_PARALLELISM'] = '0'
+os.environ['HF_HUB_DISABLE_SYMLINKS'] = '1'
+
+# 强制刷新输出
+import functools
+print = functools.partial(print, flush=True)
 
 from config import KNOWLEDGE_BASE_DIR, VECTOR_STORE_DIR, CASES_OUTPUT_DIR
 from knowledge_base import KnowledgeBase
@@ -46,12 +55,12 @@ def main():
     # 初始化知识库
     kb = KnowledgeBase()
 
-    # 检查Ollama连接
+    # 检查LLM连接
     if args.check:
-        if kb.check_ollama_connection():
-            print("[OK] Ollama连接正常")
+        if kb.check_llm_connection():
+            print("[OK] LLM服务连接正常")
         else:
-            print("[X] Ollama连接失败，请确保Ollama服务已启动")
+            print("[X] LLM服务连接失败，请检查配置")
             sys.exit(1)
         return
 

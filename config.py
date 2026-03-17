@@ -15,14 +15,29 @@ CASES_OUTPUT_DIR = PROJECT_ROOT / "cases"  # 测试用例输出目录
 
 # Chroma配置
 COLLECTION_NAME = "test_knowledge_base"
-EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"  # 中文embedding模型
+EMBEDDING_MODEL = "D:/models/m3e-base"  # 本地embedding模型路径
 
-# Ollama配置
+# LLM提供商配置
+LLM_PROVIDER = "volcano"  # LLM提供商: "ollama" | "volcano"
+
+# Ollama配置（当 LLM_PROVIDER = "ollama" 时生效）
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen3.5:9b-q8_0"  # 或其他你下载的模型
+
+# 火山引擎配置（当 LLM_PROVIDER = "volcano" 时生效）
+# 火山引擎API Key（从火山引擎控制台获取）
+VOLCANO_API_KEY = "87c49200-b90a-44bf-80e9-570969401a81"
+# 火山引擎API地址
+VOLCANO_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
+# 火山引擎模型
+VOLCANO_MODEL = "doubao-seed-2-0-code"
 
 # 测试用例生成配置
 CHUNK_SIZE = 1000  # 文档分块大小
 CHUNK_OVERLAP = 200  # 分块重叠大小
-TOP_K = 3  # 检索Top-K个相关文档
+TOP_K = 5  # 检索Top-K个相关文档
 MAX_TOKENS = 4096  # LLM最大输出token数
+
+# 预处理配置
+ENABLE_PREPROCESSOR = False  # 临时禁用文档预处理
+ENABLE_LLM_TAG = False  # 默认关闭LLM标签，耗时较长

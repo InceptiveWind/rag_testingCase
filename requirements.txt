@@ -14,15 +14,30 @@ sentence-transformers>=2.2.0
 langchain-ollama>=0.1.0
 ollama>=0.1.0
 
+# LLM - OpenAI Compatible (火山引擎等)
+langchain-openai>=0.1.0
+openai>=1.0.0
+
 # Document Loaders
 langchain-text-splitters>=0.0.1
 
 # PDF Support (optional)
 pypdf>=3.0.0
+pdfplumber>=0.10.0
 
 # Word & Excel Support
 python-docx>=1.0.0
 openpyxl>=3.0.0
 
+# Image Processing
+Pillow>=10.0.0
+
+# Web Framework
+flask>=2.3.0
+
 # Other utilities
 python-dotenv>=1.0.0
+
+langchain-core
+langchain-chroma
+langchain-huggingface
