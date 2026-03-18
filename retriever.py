@@ -22,6 +22,22 @@ try:
 except ImportError:
     RERANK_AVAILABLE = False
 
+# CrossEncoder 模型缓存，避免重复加载
+_cross_encoder_cache = {}
+_cross_encoder_model_path = 'D:/models/bge-reranker-large'
+
+
+def get_cross_encoder():
+    """获取 CrossEncoder 模型实例（带缓存）"""
+    if _cross_encoder_model_path not in _cross_encoder_cache:
+        try:
+            _cross_encoder_cache[_cross_encoder_model_path] = CrossEncoder(_cross_encoder_model_path)
+            print(f"CrossEncoder 模型已加载: {_cross_encoder_model_path}")
+        except Exception as e:
+            print(f"CrossEncoder 模型加载失败: {e}")
+            return None
+    return _cross_encoder_cache[_cross_encoder_model_path]
+
 # 父文档检索器
 try:
     from langchain.retrievers import ParentDocumentRetriever
@@ -31,17 +47,18 @@ except ImportError:
 
 
 # 查询改写提示词
-QUERY_REWRITE_PROMPT = """你是一个查询改写专家。你的任务是将用户的问题改写为3个不同的、更适合语义检索的查询。
+QUERY_REWRITE_PROMPT = """你是一个查询改写专家。你的任务是将用户的问题改写为1-2个更适合语义检索的同义表达查询。
 
 要求：
-1. 改写的查询应该涵盖原问题的不同角度和意图
-2. 使用不同的关键词和表达方式
+1. 严格保留原查询中的核心业务术语（如人名、模块名、功能名等），不能替换或删除
+2. 只能进行同义词替换或句式调整，不能改变查询意图
 3. 每个查询应该是独立且完整的
-4. 只输出3个查询，一行一个，不要有其他内容
+4. 只输出1-2个改写后的查询，一行一个，不要有其他内容
+5. 如果原查询已经清晰表达意图，可以只输出1个
 
 原问题：{query}
 
-请输出3个改写后的查询："""
+请输出1-2个改写后的查询："""
 
 # 多轮对话上下文处理提示词
 CONTEXT_QUERY_PROMPT = """你是一个查询处理专家。根据对话历史，将当前问题改写为一个独立的、完整的查询。
@@ -145,31 +162,73 @@ class Retriever:
     def _init_reranker(self):
         """初始化重排序模型"""
         try:
-            # 使用 BGE reranker large 模型
-            self.cross_encoder = CrossEncoder('D:/models/bge-reranker-large')
-            print("重排序模型 (bge-reranker-large) 初始化完成")
+            # 使用缓存的 CrossEncoder 模型
+            self.cross_encoder = get_cross_encoder()
+            if self.cross_encoder:
+                print("重排序模型 (bge-reranker-large) 初始化完成")
+            else:
+                self.use_rerank = False
         except Exception as e:
             print(f"重排序模型初始化失败: {e}")
             self.use_rerank = False
 
-    def retrieve(self, query: str) -> List[Document]:
-        """检索与查询相关的文档"""
+    def retrieve(self, query: str, version: str = None, file_hash: str = None) -> List[Document]:
+        """检索与查询相关的文档
+
+        Args:
+            query: 查询文本
+            version: 可选，按版本号过滤。支持模糊输入：
+                - 空/留空：默认最新版本
+                - 精确版本号：如 "20260318_123000"
+                - 关键词："最新"、"第二新"、"前3个"
+                - 文件名：如 "合同评审流程.docx"
+            file_hash: 可选，按文件哈希过滤（只检索指定文件的文档）
+
+        Returns:
+            相关文档列表
+        """
         if not self.vectorstore:
             raise ValueError("向量存储未初始化")
 
+        # 解析模糊版本输入
+        filter_dict = {}
+        if version:
+            # 解析模糊输入得到具体版本列表
+            matched_versions = self.parse_version_input(version)
+            if matched_versions:
+                # 使用第一个匹配的版本（最新的）
+                filter_dict['version'] = matched_versions[0]
+                print(f"版本过滤: 输入 '{version}' -> 使用版本 '{matched_versions[0]}'")
+            else:
+                print(f"版本过滤: 输入 '{version}' 未匹配到任何版本，将返回空结果")
+
+        if file_hash:
+            filter_dict['file_hash'] = file_hash
+
         if self.use_hybrid:
-            return self._hybrid_retrieve(query)
+            return self._hybrid_retrieve(query, filter_dict)
         else:
-            docs = self.retriever.invoke(query)
+            if filter_dict:
+                docs = self.retriever.invoke(query, filter=filter_dict)
+            else:
+                docs = self.retriever.invoke(query)
             return docs[:self.top_k]
 
-    def _hybrid_retrieve(self, query: str) -> List[Document]:
-        """混合检索：向量 + BM25"""
+    def _hybrid_retrieve(self, query: str, filter_dict: dict = None) -> List[Document]:
+        """混合检索：向量 + BM25
+
+        Args:
+            query: 查询文本
+            filter_dict: 可选的过滤条件字典
+        """
         # 1. 向量检索
-        vector_docs = self.retriever.invoke(query)
+        if filter_dict:
+            vector_docs = self.retriever.invoke(query, filter=filter_dict)
+        else:
+            vector_docs = self.retriever.invoke(query)
         vector_scores = self._get_vector_scores(vector_docs, query)
 
-        # 2. BM25 检索
+        # 2. BM25 检索（BM25不支持filter，后续需要处理）
         bm25_docs, bm25_scores = self._bm25_retrieve(query)
 
         # 3. 合并结果
@@ -178,11 +237,38 @@ class Retriever:
             bm25_docs, bm25_scores
         )
 
-        # 4. 重排序
+        # 4. 如果有filter，在合并后再次过滤
+        if filter_dict:
+            combined = self._filter_docs(combined, filter_dict)
+
+        # 5. 重排序
         if self.use_rerank and len(combined) > 1:
             combined = self._rerank(query, combined)
 
         return combined[:self.top_k]
+
+    def _filter_docs(self, docs: List[Document], filter_dict: dict) -> List[Document]:
+        """根据filter条件过滤文档
+
+        注意：如果指定了过滤条件，会排除没有对应metadata字段的旧文档
+        """
+        if not filter_dict:
+            return docs
+
+        filtered = []
+        for doc in docs:
+            match = True
+            for key, value in filter_dict.items():
+                # 如果文档没有这个字段，排除该文档
+                if key not in doc.metadata:
+                    match = False
+                    break
+                if doc.metadata.get(key) != value:
+                    match = False
+                    break
+            if match:
+                filtered.append(doc)
+        return filtered
 
     def _get_vector_scores(self, docs: List[Document], query: str) -> dict:
         """获取向量检索的分数"""
@@ -308,6 +394,108 @@ class Retriever:
             print(f"来源: {doc.metadata.get('source', '未知')}")
             print(f"内容预览: {doc.page_content[:200]}...")
 
+    def get_all_versions(self) -> List[str]:
+        """获取所有可用的版本列表"""
+        try:
+            # 获取向量存储中的所有文档
+            # 使用get方法获取所有数据
+            results = self.vectorstore.get()
+            if not results or 'metadatas' not in results:
+                return []
+
+            versions = set()
+            for metadata in results.get('metadatas', []):
+                if metadata and 'version' in metadata:
+                    versions.add(metadata['version'])
+
+            # 按时间排序（降序，最新的在前）
+            sorted_versions = sorted(versions, reverse=True)
+            return sorted_versions
+        except Exception as e:
+            print(f"获取版本列表失败: {e}")
+            return []
+
+    def get_versions_by_filename(self, filename: str) -> List[str]:
+        """获取指定文件的所有版本"""
+        try:
+            results = self.vectorstore.get()
+            if not results or 'metadatas' not in results:
+                return []
+
+            versions = set()
+            for metadata in results.get('metadatas', []):
+                if metadata:
+                    source = metadata.get('source', '')
+                    if filename in source and 'version' in metadata:
+                        versions.add(metadata['version'])
+
+            sorted_versions = sorted(versions, reverse=True)
+            return sorted_versions
+        except Exception as e:
+            print(f"获取文件版本列表失败: {e}")
+            return []
+
+    def parse_version_input(self, version_input: str) -> List[str]:
+        """解析模糊版本输入，返回匹配的版本列表
+
+        Args:
+            version_input: 用户输入的版本字符串
+
+        Returns:
+            匹配的版本列表（按时间降序排列）
+        """
+        if not version_input or not version_input.strip():
+            # 空输入，返回最新版本
+            versions = self.get_all_versions()
+            return versions[:1] if versions else []
+
+        version_input = version_input.strip()
+
+        # 获取所有版本
+        all_versions = self.get_all_versions()
+        if not all_versions:
+            return []
+
+        # 精确匹配版本号
+        if version_input in all_versions:
+            return [version_input]
+
+        # 匹配文件名
+        matching_versions = []
+        for v in all_versions:
+            file_versions = self.get_versions_by_filename(version_input)
+            matching_versions.extend(file_versions)
+
+        if matching_versions:
+            return sorted(set(matching_versions), reverse=True)
+
+        # 模糊匹配关键词
+        version_input_lower = version_input.lower()
+
+        # 处理特殊关键词
+        if version_input_lower in ['最新', '最新版本', 'newest', 'latest']:
+            return all_versions[:1]
+        elif version_input_lower in ['最旧', '最早', 'oldest', 'earliest']:
+            return all_versions[-1:] if all_versions else []
+        elif version_input_lower in ['第二新', '倒数第二', '2nd newest']:
+            return all_versions[1:2] if len(all_versions) > 1 else all_versions[:1]
+        elif version_input_lower in ['第三新', '倒数第三', '3rd newest']:
+            return all_versions[2:3] if len(all_versions) > 2 else all_versions[:1]
+
+        # 处理数字前缀（如 "前3个"、"最近3个"）
+        import re
+        match = re.match(r'前?(\d+)个', version_input_lower)
+        if match:
+            count = int(match.group(1))
+            return all_versions[:count]
+
+        # 尝试模糊匹配版本号的一部分
+        for v in all_versions:
+            if version_input in v:
+                matching_versions.append(v)
+
+        return sorted(set(matching_versions), reverse=True) if matching_versions else []
+
 
 class AdvancedRetriever:
     """高级检索器 - 支持查询改写、多路召回、父文档召回、元数据过滤、多轮对话"""
@@ -347,22 +535,22 @@ class AdvancedRetriever:
         self.parent_text_splitter = parent_text_splitter
         self.child_text_splitter = child_text_splitter
 
-        # 重排序模型
+        # 重排序模型（使用缓存）
         self.cross_encoder = None
         if RERANK_AVAILABLE:
             try:
-                self.cross_encoder = CrossEncoder('D:/models/bge-reranker-large')
+                self.cross_encoder = get_cross_encoder()
             except Exception as e:
                 print(f"重排序模型初始化失败: {e}")
 
     def rewrite_query(self, query: str) -> List[str]:
-        """查询改写 - 将原始query改写为3个更适合检索的query
+        """查询改写 - 将原始query改写为1-2个更适合检索的query
 
         Args:
             query: 原始查询
 
         Returns:
-            改写后的3个查询列表
+            改写后的查询列表（包含原始查询和改写查询）
         """
         if not self.llm_provider:
             print("警告: 未配置LLM提供商，无法进行查询改写")
@@ -373,16 +561,15 @@ class AdvancedRetriever:
             result = self.llm_provider.chat(prompt)
 
             # 解析结果，按行分割
-            queries = [q.strip() for q in result.strip().split('\n') if q.strip()]
+            rewritten = [q.strip() for q in result.strip().split('\n') if q.strip()]
 
-            # 确保返回3个查询
-            if len(queries) >= 3:
-                return queries[:3]
-            else:
-                # 如果返回不足3个，补充原始查询
-                while len(queries) < 3:
-                    queries.append(query)
-                return queries[:3]
+            # 限制最多2个改写查询
+            rewritten = rewritten[:2]
+
+            # 始终保留原始查询在第一位
+            queries = [query] + rewritten
+
+            return queries
 
         except Exception as e:
             print(f"查询改写失败: {e}")
@@ -392,14 +579,16 @@ class AdvancedRetriever:
         self,
         query: str,
         filter: Optional[Dict[str, Any]] = None,
-        use_rerank: bool = True
+        use_rerank: bool = True,
+        boost_versions: List[str] = None
     ) -> List[Document]:
-        """多路召回 - 3个query分别检索，合并去重后重排序
+        """多路召回 - 多个query分别检索，合并去重后重排序
 
         Args:
             query: 原始查询
             filter: 元数据过滤条件
             use_rerank: 是否使用重排序
+            boost_version: 指定版本时，提升该版本文档的排名
 
         Returns:
             检索到的文档列表
@@ -425,7 +614,24 @@ class AdvancedRetriever:
             except Exception as e:
                 print(f"检索查询 '{q}' 失败: {e}")
 
-        # 3. 重排序
+        # 3. 如果指定了版本，补充检索该版本的文档
+        if boost_versions:
+            # 先提升已有文档的排名
+            all_docs = self._boost_version_docs(all_docs, boost_versions)
+
+            # 补充检索指定版本的文档（无论当前数量多少）
+            extra_docs = self._retrieve_by_versions(query, boost_versions, self.top_k)
+            # 合并并去重
+            existing_contents = set(d.page_content[:100] for d in all_docs)  # 用内容前100字符作为唯一标识
+            for doc in extra_docs:
+                content_key = doc.page_content[:100]
+                if content_key not in existing_contents:
+                    all_docs.append(doc)
+                    existing_contents.add(content_key)
+
+            print(f"版本补充后总文档数: {len(all_docs)}")
+
+        # 4. 重排序
         if use_rerank and self.cross_encoder and len(all_docs) > 1:
             all_docs = self._rerank(query, all_docs)
 
@@ -632,6 +838,76 @@ class AdvancedRetriever:
         except Exception as e:
             print(f"上下文查询生成失败: {e}")
             return query
+
+    def _boost_version_docs(self, docs: List[Document], boost_versions: List[str]) -> List[Document]:
+        """提升指定版本文档的排名
+
+        Args:
+            docs: 文档列表
+            boost_versions: 需要提升的版本号列表
+
+        Returns:
+            调整顺序后的文档列表
+        """
+        if not docs or not boost_versions:
+            return docs
+
+        # 转换为集合便于快速查找
+        boost_set = set(boost_versions)
+
+        # 分离匹配版本和非匹配版本的文档
+        boosted_docs = []
+        other_docs = []
+
+        for doc in docs:
+            doc_version = doc.metadata.get('version', '')
+            if doc_version in boost_set:
+                boosted_docs.append(doc)
+            else:
+                other_docs.append(doc)
+
+        # 匹配版本的文档排在前面
+        result = boosted_docs + other_docs
+        print(f"版本提升: 匹配版本 {boost_versions} 的文档 {len(boosted_docs)} 个排在前面")
+
+        return result
+
+    def _retrieve_by_versions(self, query: str, versions: List[str], limit: int = 5) -> List[Document]:
+        """根据版本列表检索文档
+
+        Args:
+            query: 查询文本
+            versions: 版本号列表
+            limit: 最多返回数量
+
+        Returns:
+            文档列表
+        """
+        if not versions or not self.vectorstore:
+            return []
+
+        try:
+            results = self.vectorstore.get(where={'version': {'$in': versions}})
+            if not results or 'documents' not in results:
+                return []
+
+            docs = []
+            for i, doc_content in enumerate(results.get('documents', [])):
+                if doc_content and i < len(results.get('metadatas', [])):
+                    metadata = results['metadatas'][i]
+                    doc = Document(page_content=doc_content, metadata=metadata)
+                    docs.append(doc)
+
+            # 如果有重排序模型，按相关性排序
+            if self.cross_encoder and docs:
+                docs = self._rerank(query, docs)
+
+            print(f"版本补充检索: 从版本 {versions} 中补充检索到 {len(docs)} 个文档")
+            return docs[:limit]
+
+        except Exception as e:
+            print(f"版本补充检索失败: {e}")
+            return []
 
     def _rerank(self, query: str, docs: List[Document]) -> List[Document]:
         """使用交叉编码器重排序"""

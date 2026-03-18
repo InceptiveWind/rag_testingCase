@@ -4,6 +4,7 @@ Flask Web 应用 - 测试用例生成系统
 
 import os
 import sys
+import secrets
 from flask import Flask, render_template, request, jsonify, redirect, url_for, send_from_directory
 from pathlib import Path
 from werkzeug.utils import secure_filename
@@ -27,13 +28,14 @@ from config import (
     MAX_TOKENS,
     ENABLE_PREPROCESSOR,
     ENABLE_LLM_TAG,
+    USE_QUERY_REWRITE,
 )
 
 app = Flask(__name__)
 # 禁用模板缓存，确保每次都重新加载
 app.jinja_env.auto_reload = True
 app.config['TEMPLATES_AUTO_RELOAD'] = True
-app.config['SECRET_KEY'] = 'rag-test-case-generator'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 最大50MB
 
 # 支持的文件类型
@@ -109,8 +111,9 @@ def generate():
 
         query = data.get('query', '').strip()
         num_cases = int(data.get('num_cases', 10))
+        version = data.get('version', '').strip()  # 版本过滤参数
 
-        print(f"query: {query}, num_cases: {num_cases}")
+        print(f"query: {query}, num_cases: {num_cases}, version: {version}")
 
         if not query:
             return jsonify({'status': 'error', 'message': '请输入查询内容'})
@@ -129,8 +132,13 @@ def generate():
         print(f"开始生成测试用例，num_cases={num_cases}...")
         # 生成测试用例（examples从配置文件中读取）
         try:
-            # 使用查询改写+多路召回的AdvancedRetriever
-            result = kb.query_with_rewrite(query, return_context=True, num_cases=num_cases)
+            # 根据配置决定是否使用查询改写
+            if USE_QUERY_REWRITE:
+                # 使用查询改写+多路召回的AdvancedRetriever
+                result = kb.query_with_rewrite(query, return_context=True, num_cases=num_cases, version=version)
+            else:
+                # 使用普通检索
+                result = kb.query(query, return_context=True, num_cases=num_cases, version=version)
         except Exception as query_error:
             print(f"kb.query 发生错误: {query_error}")
             import traceback
@@ -146,20 +154,24 @@ def generate():
                 content_val = result.get('content')
                 filepath_val = result.get('filepath')
 
-                # 强制转换为字符串
-                content_str = ''
-                if content_val is not None:
-                    content_str = str(content_val)
+                # 如果是列表（用例数组），直接传递；否则转为字符串
+                if isinstance(content_val, list):
+                    content_to_send = content_val
+                elif content_val is not None:
+                    content_to_send = str(content_val)
+                else:
+                    content_to_send = ''
 
                 filepath_str = ''
                 if filepath_val is not None:
                     filepath_str = str(filepath_val)
 
                 result_data = {
-                    'content': content_str,
+                    'content': content_to_send,
                     'filepath': filepath_str
                 }
             else:
+                # 其他情况转为字符串
                 result_data = {
                     'content': str(result) if result else '',
                     'filepath': ''
@@ -214,19 +226,6 @@ def list_cases():
     return jsonify({'status': 'success', 'cases': cases})
 
 
-@app.route('/case/<path:filename>')
-def view_case(filename):
-    """查看测试用例内容"""
-    case_path = CASES_OUTPUT_DIR / filename
-
-    if not case_path.exists():
-        return "文件不存在", 404
-
-    with open(case_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    return render_template('case.html', filename=filename, content=content)
-
 
 @app.route('/download/<filename>')
 def download_case(filename):
@@ -266,16 +265,36 @@ def status():
         docs_dir = Path(KNOWLEDGE_BASE_DIR)
         doc_count = len(list(docs_dir.rglob('*.*'))) if docs_dir.exists() else 0
 
-        # 检查测试用例
-        cases_dir = Path(CASES_OUTPUT_DIR)
-        case_count = len(list(cases_dir.glob('*.md'))) if cases_dir.exists() else 0
+        # 检查已入库的文档数量（从增量构建状态文件读取）
+        vector_doc_count = 0
+        state_file = VECTOR_STORE_DIR / ".file_state.json"
+        if state_file.exists():
+            try:
+                import json
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    file_states = json.load(f)
+                    vector_doc_count = len(file_states)
+            except:
+                pass
+
+        # 判断构建状态
+        # 1. 向量库没有任何文档 -> 未构建
+        # 2. 已入库文档数 < 文档目录文档数 -> 部分构建
+        # 3. 已入库文档数 >= 文档目录文档数 -> 已构建
+        if vector_doc_count == 0:
+            build_status = '未构建'
+        elif vector_doc_count < doc_count:
+            build_status = '部分构建'
+        else:
+            build_status = '已构建'
 
         return jsonify({
             'status': 'success',
             'data': {
                 'has_vectorstore': has_vectorstore,
                 'doc_count': doc_count,
-                'case_count': case_count,
+                'vector_doc_count': vector_doc_count,
+                'build_status': build_status,
                 'llm_provider': LLM_PROVIDER,
                 'llm_model': VOLCANO_MODEL,
                 'embedding_model': EMBEDDING_MODEL
@@ -285,9 +304,31 @@ def status():
         return jsonify({'status': 'error', 'message': str(e)})
 
 
+@app.route('/versions')
+def list_versions():
+    """获取可用的知识库版本列表"""
+    try:
+        kb = get_knowledge_base()
+        if not kb.load_knowledge_base():
+            return jsonify({'status': 'success', 'versions': []})
+
+        # 获取所有版本
+        versions = kb.retriever.get_all_versions()
+
+        return jsonify({
+            'status': 'success',
+            'versions': versions
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+
 def allowed_file(filename):
     """检查文件类型是否允许"""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    if not filename or '.' not in filename:
+        return False
+    ext = filename.rsplit('.', 1)[1].lower() if filename.rsplit('.', 1)[1] else ''
+    return ext in ALLOWED_EXTENSIONS
 
 
 @app.route('/upload', methods=['POST'])
@@ -361,7 +402,13 @@ def list_documents():
 def delete_document(filename):
     """删除知识库文档"""
     try:
-        doc_path = KNOWLEDGE_BASE_DIR / filename
+        # 安全检查：防止路径遍历攻击
+        # 解析路径并确保其在 KNOWLEDGE_BASE_DIR 内
+        doc_path = (KNOWLEDGE_BASE_DIR / filename).resolve()
+
+        # 验证路径以 KNOWLEDGE_BASE_DIR 开头，防止 .. 遍历
+        if not str(doc_path).startswith(str(KNOWLEDGE_BASE_DIR.resolve())):
+            return jsonify({'status': 'error', 'message': '非法文件路径'})
 
         if not doc_path.exists():
             return jsonify({'status': 'error', 'message': '文件不存在'})

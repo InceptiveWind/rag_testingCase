@@ -14,6 +14,7 @@ from langchain_core.documents import Document
 try:
     import openpyxl
     from openpyxl.styles import Alignment, Font, Border, Side
+
     EXCEL_AVAILABLE = True
 except ImportError:
     EXCEL_AVAILABLE = False
@@ -28,13 +29,13 @@ class TestCaseGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def generate(
-        self,
-        query: str,
-        context_docs: List[Document],
-        num_cases: int = 10,
-        batch_size: int = 10,
-        max_retries: int = 2,
-        examples: str = ""
+            self,
+            query: str,
+            context_docs: List[Document],
+            num_cases: int = 10,
+            batch_size: int = 10,
+            max_retries: int = 2,
+            examples: str = ""
     ) -> str:
         """
         生成测试用例（支持大批量）
@@ -54,13 +55,15 @@ class TestCaseGenerator:
 
         all_test_cases = []
         existing_names = []  # 记录已生成的用例名，避免重复
-        batches = (num_cases + batch_size - 1) // batch_size  # 计算批次数
 
-        for batch_num in range(batches):
+        # 持续生成直到达到目标数量
+        batch_num = 0
+        while len(all_test_cases) < num_cases:
             current_batch_size = min(batch_size, num_cases - len(all_test_cases))
             start_idx = len(all_test_cases) + 1
 
-            print(f"  生成第 {batch_num + 1}/{batches} 批 (目标: {current_batch_size} 个用例)...")
+            print(
+                f"  生成第 {batch_num + 1} 批 (目标: {current_batch_size} 个用例，已获取: {len(all_test_cases)}/{num_cases})...")
 
             batch_cases = []
             retry_count = 0
@@ -91,7 +94,8 @@ class TestCaseGenerator:
                             print(f"    过滤掉重复用例: {name}")
 
                     batch_cases.extend(new_cases)
-                    print(f"    第 {retry_count + 1} 次尝试: 请求{request_size}个, 获取 {len(temp_cases)} 个, 去重后 {len(new_cases)} 个")
+                    print(
+                        f"    第 {retry_count + 1} 次尝试: 请求{request_size}个, 获取 {len(temp_cases)} 个, 去重后 {len(new_cases)} 个")
                 else:
                     print(f"    第 {retry_count + 1} 次尝试: 获取 0 个用例")
 
@@ -104,10 +108,7 @@ class TestCaseGenerator:
                 print(f"  第 {batch_num + 1} 批生成失败")
 
             print(f"  当前累计: {len(all_test_cases)}/{num_cases} 个测试用例")
-
-            # 如果已经达到目标，可以提前结束
-            if len(all_test_cases) >= num_cases:
-                break
+            batch_num += 1
 
         if not all_test_cases:
             return "错误：无法生成测试用例，请检查LLM服务是否正常运行"
@@ -128,13 +129,13 @@ class TestCaseGenerator:
         return unique_cases
 
     def _generate_batch(
-        self,
-        query: str,
-        context_docs: List[Document],
-        start_idx: int = 1,
-        batch_size: int = 10,
-        examples: str = "",
-        existing_names: List[str] = None
+            self,
+            query: str,
+            context_docs: List[Document],
+            start_idx: int = 1,
+            batch_size: int = 10,
+            examples: str = "",
+            existing_names: List[str] = None
     ) -> List[Dict]:
         """生成一批测试用例"""
         if existing_names is None:
@@ -143,7 +144,7 @@ class TestCaseGenerator:
         print(f"  _generate_batch: 开始生成 {batch_size} 个用例")
         # 构建上下文
         context = "\n\n".join([
-            f"文档{i+1}:\n{doc.page_content[:1000]}"  # 限制每个文档长度
+            f"文档{i + 1}:\n{doc.page_content[:1000]}"  # 限制每个文档长度
             for i, doc in enumerate(context_docs[:5])  # 最多5个文档
         ])
 
@@ -198,7 +199,8 @@ class TestCaseGenerator:
             cases = self._parse_json_response(response, expected_count=batch_size)
             print(f"  解析得到 {len(cases)} 条用例")
             for i, c in enumerate(cases[:5]):
-                print(f"    {i+1}. name='{c.get('name', '')}', step_id={c.get('step_id')}, step='{c.get('step', '')}', precondition='{c.get('precondition', '')}', priority='{c.get('priority', '')}', expected='{c.get('expected', '')}'")
+                print(
+                    f"    {i + 1}. name='{c.get('name', '')}', step_id={c.get('step_id')}, step='{c.get('step', '')}', precondition='{c.get('precondition', '')}', priority='{c.get('priority', '')}', expected='{c.get('expected', '')}'")
             return cases
         except Exception as e:
             import traceback
@@ -217,6 +219,22 @@ class TestCaseGenerator:
             if cleaned_response.endswith('```'):
                 cleaned_response = cleaned_response[:-3]
             cleaned_response = cleaned_response.strip()
+
+        # 处理LLM返回实际换行符的情况：将字符串值中的实际换行符替换为\\n
+        # 这样可以让JSON解析更健壮
+        # 注意：这是一个启发式处理，可能不完美
+        try:
+            # 尝试修复：如果有未转义的换行符在引号内，尝试转义
+            # 简单方法：将不在JSON结构中的实际换行符替换为\\n
+            import re
+            # 找到JSON数组范围
+            array_match = re.search(r'\[', cleaned_response)
+            if array_match:
+                # 简单处理：将连续多个实际换行符替换
+                # 这是一个简化处理，更好的方法是逐字符分析
+                pass
+        except:
+            pass
 
         try:
             # 尝试提取JSON数组
@@ -241,8 +259,30 @@ class TestCaseGenerator:
             # JSON解析失败，尝试正则提取完整字段
             cases = []
 
-            # 提取每个用例块（从 { 到 }）
-            case_blocks = re.findall(r'\{[^{}]*\}', cleaned_response, re.DOTALL)
+            # 尝试修复截断的JSON：查找数组的开始和结束
+            # 如果JSON被截断，尝试找到最后一个完整的对象
+            try:
+                # 查找所有可能的JSON数组边界
+                array_start = cleaned_response.find('[')
+                if array_start >= 0:
+                    # 尝试修复：找到最后一个 }
+                    last_brace = cleaned_response.rfind('}')
+                    if last_brace > array_start:
+                        # 尝试添加 ] 使JSON完整
+                        fixed_json = cleaned_response[array_start:last_brace + 1] + ']'
+                        try:
+                            fixed_cases = json.loads(fixed_json)
+                            if isinstance(fixed_cases, list) and len(fixed_cases) > 0:
+                                print(f"  修复截断JSON成功，获取 {len(fixed_cases)} 个用例")
+                                return fixed_cases
+                        except:
+                            pass
+            except Exception as fix_error:
+                print(f"  尝试修复JSON失败: {fix_error}")
+
+            # 提取每个用例块（改进的正则，处理截断情况）
+            # 使用更宽松的匹配
+            case_blocks = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_response, re.DOTALL)
 
             for block in case_blocks[:expected_count]:
                 case = {}
@@ -288,8 +328,10 @@ class TestCaseGenerator:
                         case['expected'] = ''
                     if 'priority' not in case:
                         case['priority'] = ''
-                    # 处理换行符（将 \\n 转换为实际换行）
+                    # 处理换行符：将 \\n 转换为实际换行
+                    # 注意：正则提取的内容可能包含实际的换行符，需要清理
                     if case.get('step'):
+                        # 先替换 \\n 为 \n，再清理实际换行符（如果需要显示的话保持原样）
                         case['step'] = case['step'].replace('\\n', '\n')
                     if case.get('expected'):
                         case['expected'] = case['expected'].replace('\\n', '\n')
@@ -376,11 +418,11 @@ class TestCaseGenerator:
         return md_content
 
     def generate_continue(
-        self,
-        query: str,
-        context_docs: List[Document],
-        existing_cases: List[Dict],
-        continue_prompt: str = ""
+            self,
+            query: str,
+            context_docs: List[Document],
+            existing_cases: List[Dict],
+            continue_prompt: str = ""
     ) -> str:
         """
         继续生成更多测试用例（用于上下文续写）
@@ -442,7 +484,8 @@ class TestCaseGenerator:
         # 保存前统计用例数量
         step1_cases = [c for c in cases if c.get('step_id') == 1]
         unique_names = set(c.get('name', '') for c in cases if c.get('name', '').strip())
-        print(f"  保存到Excel前: 共 {len(cases)} 行, step_id=1用例: {len(step1_cases)} 个, 唯一name: {len(unique_names)} 个")
+        print(
+            f"  保存到Excel前: 共 {len(cases)} 行, step_id=1用例: {len(step1_cases)} 个, 唯一name: {len(unique_names)} 个")
 
         if not cases:
             print("警告: 没有测试用例可保存")
@@ -543,7 +586,7 @@ class TestCaseGenerator:
             ws.row_dimensions[row_idx].height = max(20, max_lines * 20)
 
         # 删除最后一条用例之后的空行（保留表头）
-        last_case_row = start_row + len(cases)
+        last_case_row = len(cases) + 1
         while ws.max_row > last_case_row:
             ws.delete_rows(ws.max_row)
 
@@ -657,7 +700,7 @@ class TestCaseFormatter:
     @staticmethod
     def format_test_case(name: str, steps: List[str], expected: str) -> str:
         """格式化单个测试用例"""
-        formatted_steps = "\n".join([f"    {i+1}. {step}" for i, step in enumerate(steps)])
+        formatted_steps = "\n".join([f"    {i + 1}. {step}" for i, step in enumerate(steps)])
 
         return f"""
 ### 测试用例: {name}

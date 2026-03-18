@@ -196,7 +196,7 @@ class KnowledgeBase:
 
         return False
 
-    def query(self, query_text: str, return_context: bool = True, num_cases: int = 10, examples: str = None):
+    def query(self, query_text: str, return_context: bool = True, num_cases: int = 10, examples: str = None, version: str = None):
         """查询并生成测试用例
 
         Args:
@@ -204,6 +204,7 @@ class KnowledgeBase:
             return_context: 是否打印检索到的文档
             num_cases: 生成的测试用例数量
             examples: 用例示例，为None时从配置文件读取
+            version: 可选，版本过滤，支持模糊输入（如"最新"、"第二新"、"前3个"、文件名等）
         """
         # 如果未传入examples，则从配置读取
         if examples is None:
@@ -213,8 +214,8 @@ class KnowledgeBase:
         if not self.load_knowledge_base():
             raise ValueError("知识库未构建，请先运行 --build")
 
-        # 检索相关文档
-        context_docs = self.retriever.retrieve(query_text)
+        # 检索相关文档（支持版本过滤）
+        context_docs = self.retriever.retrieve(query_text, version=version)
 
         if return_context:
             self.retriever.print_retrieved_docs(context_docs)
@@ -317,7 +318,7 @@ class KnowledgeBase:
             return self.config.get('examples', EXAMPLES)
         return examples
 
-    def query_with_rewrite(self, query_text: str, return_context: bool = True, num_cases: int = 10, examples: str = None):
+    def query_with_rewrite(self, query_text: str, return_context: bool = True, num_cases: int = 10, examples: str = None, version: str = None):
         """使用查询改写进行检索
 
         Args:
@@ -325,6 +326,7 @@ class KnowledgeBase:
             return_context: 是否打印检索到的文档
             num_cases: 生成的测试用例数量
             examples: 用例示例，为None时从配置文件读取
+            version: 可选，版本过滤，支持模糊输入
 
         Returns:
             包含结果的文件路径
@@ -332,8 +334,36 @@ class KnowledgeBase:
         examples = self._get_examples(examples)
         self._init_advanced_retriever()
 
-        # 使用多路召回
-        context_docs = self.advanced_retriever.multi_query_retrieve(query_text)
+        # 解析版本过滤条件（支持多个关键词，逗号分隔）
+        filter_dict = None
+        matched_versions = []
+        boost_versions = []
+
+        if version:
+            # 支持多个关键词，用逗号分隔
+            keywords = [k.strip() for k in version.split(',') if k.strip()]
+            all_matched_versions = []
+
+            for kw in keywords:
+                kw_versions = self.retriever.parse_version_input(kw)
+                if kw_versions:
+                    all_matched_versions.extend(kw_versions)
+                    boost_versions.extend(kw_versions)
+                    print(f"关键词 '{kw}' 匹配版本: {kw_versions}")
+                else:
+                    print(f"关键词 '{kw}' 未匹配到任何版本")
+
+            # 去重
+            if all_matched_versions:
+                matched_versions = list(set(all_matched_versions))
+                print(f"版本过滤: 输入 '{version}' -> 使用版本 {matched_versions}")
+
+        # 使用多路召回，指定提升匹配版本的排名
+        context_docs = self.advanced_retriever.multi_query_retrieve(
+            query_text,
+            filter=filter_dict,
+            boost_versions=boost_versions
+        )
 
         if return_context:
             self.retriever.print_retrieved_docs(context_docs)

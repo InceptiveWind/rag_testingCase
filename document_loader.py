@@ -4,9 +4,11 @@
 
 import os
 import json
+import hashlib
 import zipfile
 from pathlib import Path
 from typing import List
+from datetime import datetime
 from langchain_community.document_loaders import (
     TextLoader,
     UnstructuredMarkdownLoader,
@@ -20,6 +22,19 @@ from langchain_community.document_loaders import (
 from langchain_core.documents import Document
 
 
+def compute_file_hash(file_path: Path) -> str:
+    """计算文件的MD5哈希值（基于完整内容）"""
+    hasher = hashlib.md5()
+    try:
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception as e:
+        print(f"计算文件哈希失败 {file_path.name}: {e}")
+        return ""
+
+
 class DocumentLoader:
     """文档加载器"""
 
@@ -28,12 +43,27 @@ class DocumentLoader:
         if not self.docs_dir.exists():
             self.docs_dir.mkdir(parents=True, exist_ok=True)
 
+    def _add_version_metadata(self, documents: List[Document], file_path: Path) -> List[Document]:
+        """为文档添加版本信息到metadata"""
+        file_hash = compute_file_hash(file_path)
+        version = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        for doc in documents:
+            # 更新metadata，添加版本信息
+            doc.metadata['file_hash'] = file_hash
+            doc.metadata['version'] = version
+            # 确保source字段存在
+            if 'source' not in doc.metadata:
+                doc.metadata['source'] = str(file_path)
+
+        return documents
+
     def load_file(self, file_path: Path):
         """加载单个文件"""
         suffix = file_path.suffix.lower()
 
-        # 特殊处理：跳过 .doc (需要 antiword) 和 .ppt (稳定性问题)
-        if suffix in ['.doc', '.ppt']:
+        # 特殊处理：跳过 .ppt (稳定性问题)
+        if suffix == '.ppt':
             print(f"跳过(需转换格式): {file_path.name}")
             return None
 
@@ -44,6 +74,8 @@ class DocumentLoader:
             return self._load_vsdx(file_path)
         elif suffix == '.docx':
             return self._load_docx(file_path)
+        elif suffix == '.doc':
+            return self._load_doc(file_path)
         elif suffix in ['.xlsx', '.xls']:
             return self._load_excel(file_path)
         elif suffix in ['.pptx', '.ppt']:
@@ -76,6 +108,8 @@ class DocumentLoader:
 
             documents = loader.load()
             print(f"成功加载: {file_path.name}, 共 {len(documents)} 个文档")
+            # 添加版本信息到metadata
+            documents = self._add_version_metadata(documents, file_path)
             return documents
         except Exception as e:
             print(f"加载文件失败 {file_path.name}: {e}")
@@ -108,12 +142,59 @@ class DocumentLoader:
                     metadata={'source': str(file_path), 'type': 'docx'}
                 )
                 print(f"成功加载: {file_path.name}")
-                return [doc]
+                # 添加版本信息
+                return self._add_version_metadata([doc], file_path)
             else:
                 print(f"Word文件内容为空: {file_path.name}")
                 return None
         except Exception as e:
             print(f"加载Word文件失败 {file_path.name}: {e}")
+            return None
+
+    def _load_doc(self, file_path: Path) -> List[Document]:
+        """加载 Word .doc 文件（旧格式）"""
+        try:
+            # 尝试使用 pywin32 读取 .doc 文件
+            import win32com.client
+            import os
+
+            # 创建 Word 应用实例
+            word = win32com.client.Dispatch("Word.Application")
+            word.Visible = False
+
+            try:
+                # 打开文档
+                doc = word.Documents.Open(str(file_path.absolute()))
+                paragraphs = []
+
+                # 提取所有段落
+                for para in doc.Paragraphs:
+                    text = para.Range.Text.strip()
+                    if text:
+                        paragraphs.append(text)
+
+                # 释放文档
+                doc.Close(False)
+
+                if paragraphs:
+                    content = '\n\n'.join(paragraphs)
+                    doc = Document(
+                        page_content=content,
+                        metadata={'source': str(file_path), 'type': 'doc'}
+                    )
+                    print(f"成功加载: {file_path.name}")
+                    return self._add_version_metadata([doc], file_path)
+                else:
+                    print(f"Word文件内容为空: {file_path.name}")
+                    return None
+            finally:
+                word.Quit()
+        except ImportError:
+            print(f"读取 .doc 文件需要 pywin32 库，请运行: pip install pywin32")
+            print(f"或者将 {file_path.name} 转换为 .docx 格式")
+            return None
+        except Exception as e:
+            print(f"加载Word .doc文件失败 {file_path.name}: {e}")
             return None
 
     def _load_excel(self, file_path: Path) -> List[Document]:
@@ -137,7 +218,8 @@ class DocumentLoader:
                     metadata={'source': str(file_path), 'type': 'excel'}
                 )
                 print(f"成功加载: {file_path.name}")
-                return [doc]
+                # 添加版本信息
+                return self._add_version_metadata([doc], file_path)
             else:
                 print(f"Excel文件内容为空: {file_path.name}")
                 return None
@@ -183,7 +265,8 @@ class DocumentLoader:
                     metadata={'source': str(file_path), 'type': 'pptx'}
                 )
                 print(f"成功加载: {file_path.name}")
-                return [doc]
+                # 添加版本信息
+                return self._add_version_metadata([doc], file_path)
             else:
                 print(f"PPT文件内容为空: {file_path.name}")
                 return None
@@ -208,7 +291,8 @@ class DocumentLoader:
                     metadata={'source': str(file_path), 'type': 'xmind'}
                 )
                 print(f"成功加载: {file_path.name}")
-                return [doc]
+                # 添加版本信息
+                return self._add_version_metadata([doc], file_path)
             else:
                 print(f"XMind文件内容为空: {file_path.name}")
                 return None
@@ -313,7 +397,8 @@ class DocumentLoader:
                     metadata={'source': str(file_path), 'type': 'vsdx'}
                 )
                 print(f"成功加载: {file_path.name}")
-                return [doc]
+                # 添加版本信息
+                return self._add_version_metadata([doc], file_path)
             else:
                 print(f"Visio文件内容为空: {file_path.name}")
                 return None
@@ -364,4 +449,4 @@ class DocumentLoader:
 
 def get_supported_extensions():
     """获取支持的文件扩展名"""
-    return ['.txt', '.md', '.markdown', '.pdf', '.csv', '.json', '.docx', '.xlsx', '.xls', '.pptx', '.ppt', '.xmind', '.vsdx']
+    return ['.txt', '.md', '.markdown', '.pdf', '.csv', '.json', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.xmind', '.vsdx']

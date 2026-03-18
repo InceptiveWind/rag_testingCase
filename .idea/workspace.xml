@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="改写检索">
+    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="更新模板">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/case_generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/case_generator.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/document_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/document_loader.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/knowledge_base.py" beforeDir="false" afterPath="$PROJECT_DIR$/knowledge_base.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/retriever.py" beforeDir="false" afterPath="$PROJECT_DIR$/retriever.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/templates/case.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/templates/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/templates/index.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -90,7 +94,7 @@
       <workItem from="1773670219793" duration="5378000" />
       <workItem from="1773706579540" duration="29755000" />
       <workItem from="1773744094073" duration="7767000" />
-      <workItem from="1773792910747" duration="16623000" />
+      <workItem from="1773792910747" duration="36449000" />
     </task>
     <task id="LOCAL-00001" summary="知识库创建">
       <option name="closed" value="true" />
@@ -124,7 +128,23 @@
       <option name="project" value="LOCAL" />
       <updated>1773745285806</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="各项优化">
+      <option name="closed" value="true" />
+      <created>1773813085297</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1773813085297</updated>
+    </task>
+    <task id="LOCAL-00006" summary="更新模板">
+      <option name="closed" value="true" />
+      <created>1773813242088</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1773813242089</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -134,6 +154,8 @@
     <MESSAGE value="知识库创建" />
     <MESSAGE value="增加支持文档" />
     <MESSAGE value="改写检索" />
-    <option name="LAST_COMMIT_MESSAGE" value="改写检索" />
+    <MESSAGE value="各项优化" />
+    <MESSAGE value="更新模板" />
+    <option name="LAST_COMMIT_MESSAGE" value="更新模板" />
   </component>
 </project>

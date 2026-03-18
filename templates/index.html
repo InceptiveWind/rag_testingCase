@@ -6,7 +6,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>测试用例生成系统 v3</title>
+    <title>测试用例生成系统</title>
     <style>
         * {
             margin: 0;
@@ -72,6 +72,12 @@
         }
         .status-item .value.warning {
             color: #ffc107;
+        }
+        .status-item .value.danger {
+            color: #dc3545;
+        }
+        .status-item .value.partial {
+            color: #d4a017;
         }
         .btn {
             background: #667eea;
@@ -165,7 +171,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>测试用例生成系统</h1>
+            <h1>测试用例生成系统（刘峰）--内测中</h1>
             <div class="nav">
             </div>
         </div>
@@ -178,40 +184,25 @@
             </div>
         </div>
 
-        <!-- 构建知识库 -->
-        <div class="card">
-            <h2>构建知识库</h2>
-            <p style="color: #666; margin-bottom: 16px;">
-                文档目录: <code>{{ config.knowledge_base_dir }}</code>
-            </p>
-            <p style="color: #666; margin-bottom: 16px;">
-                支持格式: TXT, MD, PDF, Word(docx), Excel(xlsx/xls), PowerPoint(pptx), XMind, Visio(vsdx), JSON, CSV
-            </p>
-            <div style="margin-bottom: 16px;">
-                <label style="margin-right: 16px;">
-                    <input type="radio" name="buildMode" value="incremental" checked> 增量构建（推荐）
-                </label>
-                <label>
-                    <input type="radio" name="buildMode" value="full"> 全量构建
-                </label>
-            </div>
-            <div class="btn-group">
-                <button class="btn" onclick="buildKnowledgeBase()">构建知识库</button>
-                <button class="btn" onclick="checkLLM()">检查LLM连接</button>
-            </div>
-            <div id="buildResult"></div>
-        </div>
-
         <!-- 上传文档 -->
         <div class="card">
             <h2>上传知识库文档</h2>
             <p style="color: #666; margin-bottom: 16px;">
-                支持格式: TXT, MD, PDF, Word(docx), Excel(xlsx/xls), PowerPoint(pptx), XMind, Visio(vsdx), JSON, CSV
+                支持格式: TXT, MD, PDF, Word(docx/doc), Excel(xlsx/xls), PowerPoint(pptx), XMind, Visio(vsdx), JSON, CSV
             </p>
             <input type="file" id="fileInput" multiple style="margin-bottom: 12px;">
             <div class="btn-group">
                 <button class="btn" onclick="uploadFiles()">上传文件</button>
                 <button class="btn" onclick="loadDocuments()">刷新列表</button>
+                <button class="btn" onclick="buildKnowledgeBase()">构建知识库</button>
+                <button class="btn" onclick="checkLLM()">检查LLM连接</button>
+            </div>
+            <p style="color: #ff9800; margin-top: 16px; background: #fff3e0; padding: 10px; border-radius: 6px;">
+                提示: 新增知识库文档后需点击"构建知识库"才能生效
+            </p>
+            <div id="buildResult"></div>
+            <div style="margin-top: 16px;">
+                <input type="text" id="docSearchInput" placeholder="搜索文档..." oninput="filterDocuments()" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px;">
             </div>
             <div id="uploadResult"></div>
             <div id="documentList" style="margin-top: 16px;"></div>
@@ -221,10 +212,14 @@
         <div class="card">
             <h2>生成测试用例</h2>
             <textarea id="queryInput" placeholder="请输入需求描述或查询内容..."></textarea>
-            <div style="margin-top: 16px; display: flex; align-items: center; gap: 16px;">
+            <div style="margin-top: 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
                 <div>
                     <label style="margin-right: 8px;">用例数量:</label>
                     <input type="number" id="numCases" value="10" min="1" max="100" style="width: 80px; padding: 8px; border: 2px solid #e0e0e0; border-radius: 8px;">
+                </div>
+                <div>
+                    <label style="margin-right: 8px;">参考文档版本:</label>
+                    <input type="text" id="versionInput" placeholder="最新/第二新/文件名" style="width: 150px; padding: 8px; border: 2px solid #e0e0e0; border-radius: 8px;">
                 </div>
                 <button class="btn" onclick="generateTestCase()">生成测试用例</button>
             </div>
@@ -233,6 +228,13 @@
     </div>
 
     <script>
+        // HTML 转义函数，防止 XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // 加载状态
         function loadStatus() {
             fetch('/status')
@@ -240,18 +242,24 @@
                 .then(data => {
                     if (data.status === 'success') {
                         const d = data.data;
+                        // 根据build_status设置样式
+                        let statusClass = 'warning';
+                        let statusText = d.build_status || '未构建';
+                        if (d.build_status === '已构建') {
+                            statusClass = 'success';
+                        } else if (d.build_status === '部分构建') {
+                            statusClass = 'partial';
+                        } else if (d.build_status === '未构建') {
+                            statusClass = 'danger';
+                        }
                         const html = `
                             <div class="status-item">
                                 <div class="label">知识库</div>
-                                <div class="value ${d.has_vectorstore ? 'success' : 'warning'}">${d.has_vectorstore ? '已构建' : '未构建'}</div>
+                                <div class="value ${statusClass}">${statusText}</div>
                             </div>
                             <div class="status-item">
-                                <div class="label">文档数量</div>
-                                <div class="value">${d.doc_count}</div>
-                            </div>
-                            <div class="status-item">
-                                <div class="label">已生成用例</div>
-                                <div class="value">${d.case_count}</div>
+                                <div class="label">文档数量（已构建/总数）</div>
+                                <div class="value">${d.vector_doc_count} / ${d.doc_count}</div>
                             </div>
                             <div class="status-item">
                                 <div class="label">LLM模型</div>
@@ -266,15 +274,14 @@
                 });
         }
 
-        // 构建知识库
+        // 构建知识库（默认增量构建）
         function buildKnowledgeBase() {
             const resultDiv = document.getElementById('buildResult');
 
-            // 获取构建模式
-            const buildMode = document.querySelector('input[name="buildMode"]:checked').value;
-            const isFullBuild = buildMode === 'full';
+            // 固定使用增量构建
+            const isFullBuild = false;
+            const modeText = '增量';
 
-            const modeText = isFullBuild ? '全量' : '增量';
             resultDiv.innerHTML = '<div class="loading"><span class="spinner"></span>正在执行' + modeText + '构建，请稍候...</div>';
 
             fetch('/build?rebuild=' + isFullBuild, { method: 'POST' })
@@ -333,6 +340,22 @@
         let currentPage = 1;
         const pageSize = 10;
         let allDocuments = [];
+        let filteredDocuments = [];
+
+        // 过滤文档列表
+        function filterDocuments() {
+            const searchText = document.getElementById('docSearchInput').value.toLowerCase();
+            if (!searchText) {
+                filteredDocuments = allDocuments;
+            } else {
+                filteredDocuments = allDocuments.filter(doc =>
+                    doc.name.toLowerCase().includes(searchText) ||
+                    doc.path.toLowerCase().includes(searchText)
+                );
+            }
+            currentPage = 1;  // 重置到第一页
+            renderDocuments();
+        }
 
         // 加载文档列表
         function loadDocuments(page = 1) {
@@ -343,6 +366,16 @@
                 .then(data => {
                     if (data.status === 'success') {
                         allDocuments = data.documents || [];
+                        // 获取搜索关键词
+                        const searchText = document.getElementById('docSearchInput').value.toLowerCase();
+                        if (!searchText) {
+                            filteredDocuments = allDocuments;
+                        } else {
+                            filteredDocuments = allDocuments.filter(doc =>
+                                doc.name.toLowerCase().includes(searchText) ||
+                                doc.path.toLowerCase().includes(searchText)
+                            );
+                        }
                         currentPage = page;
                         renderDocuments();
                     } else {
@@ -356,14 +389,14 @@
 
         function renderDocuments() {
             const listDiv = document.getElementById('documentList');
-            const totalDocs = allDocuments.length;
+            const totalDocs = filteredDocuments.length;
             const totalPages = Math.ceil(totalDocs / pageSize);
             const start = (currentPage - 1) * pageSize;
             const end = start + pageSize;
-            const pageDocs = allDocuments.slice(start, end);
+            const pageDocs = filteredDocuments.slice(start, end);
 
             if (totalDocs === 0) {
-                listDiv.innerHTML = '<p style="color: #666; margin-top: 12px;">暂无文档</p>';
+                listDiv.innerHTML = '<p style="color: #666; margin-top: 12px;">暂无匹配的文档</p>';
                 return;
             }
 
@@ -372,8 +405,8 @@
             pageDocs.forEach(doc => {
                 const size = (doc.size / 1024).toFixed(1);
                 html += '<tr style="border-bottom: 1px solid #eee;">';
-                html += '<td style="padding: 8px;">' + doc.name + ' (' + size + 'KB)</td>';
-                html += '<td style="padding: 8px; text-align: right;"><button onclick="deleteDocument(\'' + doc.path + '\')" style="background: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">删除</button></td>';
+                html += '<td style="padding: 8px;">' + escapeHtml(doc.name) + ' (' + size + 'KB)</td>';
+                html += '<td style="padding: 8px; text-align: right;"><button onclick="deleteDocument(\'' + encodeURIComponent(doc.path) + '\')" style="background: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">删除</button></td>';
                 html += '</tr>';
             });
             html += '</table>';
@@ -414,7 +447,7 @@
         function deleteDocument(path) {
             if (!confirm('确定要删除这个文件吗？')) return;
 
-            fetch('/documents/' + path, { method: 'DELETE' })
+            fetch('/documents/' + decodeURIComponent(path), { method: 'DELETE' })
                 .then(r => r.json())
                 .then(data => {
                     if (data.status === 'success') {
@@ -452,19 +485,25 @@
         function generateTestCase() {
             const query = document.getElementById('queryInput').value;
             const numCases = parseInt(document.getElementById('numCases').value) || 10;
+            const version = document.getElementById('versionInput').value;
             const resultDiv = document.getElementById('generateResult');
+            const btn = document.querySelector('button[onclick="generateTestCase()"]');
 
             if (!query.trim()) {
                 resultDiv.innerHTML = '<div class="error">请输入查询内容</div>';
                 return;
             }
 
+            // 禁用按钮
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+
             resultDiv.innerHTML = '<div class="loading"><span class="spinner"></span>正在生成 ' + numCases + ' 个测试用例，请稍候...（这可能需要几分钟）</div>';
 
             fetch('/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query, num_cases: numCases })
+                body: JSON.stringify({ query, num_cases: numCases, version: version })
             })
             .then(response => {
                 return response.json();
@@ -494,20 +533,13 @@
                         return;
                     }
 
-                    // 安全获取 content 和 filepath
-                    let content = '';
-                    let filepath = '';
-
                     // 直接从 resultData 获取 content
                     // content 可能是数组（用例列表）或字符串
                     let caseCount = 0;
-                    let displayContent = '';
 
                     if (Array.isArray(resultData.content)) {
-                        // 如果是数组，格式化显示
+                        // 如果是数组，按唯一的name计数用例数量
                         const cases = resultData.content;
-
-                        // 按唯一的name计数用例数量
                         const uniqueNames = new Set();
                         cases.forEach(tc => {
                             if (tc.name && tc.name.trim()) {
@@ -515,74 +547,42 @@
                             }
                         });
                         caseCount = uniqueNames.size;
-
-                        // 计算每个name对应的编号
-                        let currentCaseNum = 0;
-                        const nameToNum = {};
-                        cases.forEach(tc => {
-                            const name = tc.name || '';
-                            if (name && !nameToNum[name]) {
-                                currentCaseNum++;
-                                nameToNum[name] = currentCaseNum;
-                            }
-                        });
-
-                        displayContent = '<table style="width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px;">';
-                        displayContent += '<tr style="background: #667eea; color: white;"><th style="padding: 10px; text-align: left;">编号</th><th style="padding: 10px; text-align: left;">标题</th><th style="padding: 10px; text-align: left;">步骤ID</th><th style="padding: 10px; text-align: left;">优先级</th><th style="padding: 10px; text-align: left;">步骤</th><th style="padding: 10px; text-align: left;">期望结果</th></tr>';
-
-                        cases.forEach((tc, idx) => {
-                            const rowBg = idx % 2 === 0 ? '#fff' : '#f8f9fa';
-                            const stepId = tc.step_id !== undefined && tc.step_id !== null ? tc.step_id : '';
-                            const name = tc.name || '';
-                            const priority = tc.priority || '';
-                            const step = tc.step || '';
-                            const expected = tc.expected || '';
-                            const displayNum = (name && nameToNum[name]) ? nameToNum[name] : '';
-
-                            displayContent += '<tr style="background: ' + rowBg + '; border-bottom: 1px solid #eee;">';
-                            displayContent += '<td style="padding: 8px;">' + displayNum + '</td>';
-                            displayContent += '<td style="padding: 8px;">' + name + '</td>';
-                            displayContent += '<td style="padding: 8px;">' + stepId + '</td>';
-                            displayContent += '<td style="padding: 8px;">' + priority + '</td>';
-                            displayContent += '<td style="padding: 8px; max-width: 300px; white-space: pre-wrap;">' + step.replace(/\n/g, '<br>') + '</td>';
-                            displayContent += '<td style="padding: 8px; max-width: 200px; white-space: pre-wrap;">' + expected.replace(/\n/g, '<br>') + '</td>';
-                            displayContent += '</tr>';
-                        });
-                        displayContent += '</table>';
                     } else {
-                        // 如果是字符串，直接显示
-                        content = resultData.content || '';
+                        // 如果是字符串
+                        const content = resultData.content || '';
                         caseCount = content ? (content.match(/## 测试用例/g) || []).length : 0;
-                        displayContent = '<div class="result">' + content + '</div>';
                     }
 
-                    filepath = resultData.filepath || resultData.filepath === '' ? String(resultData.filepath) : '';
+                    const filepath = resultData.filepath || resultData.filepath === '' ? String(resultData.filepath) : '';
 
-                    // 显示成功消息和文件路径
+                    // 显示成功消息
                     let html = '<div style="color: #28a745; margin-bottom: 16px;">';
                     html += '<strong>测试用例生成成功！</strong><br>';
-                    html += '<span style="color: #666;">已生成 ' + caseCount + ' 个用例</span><br>';
+                    html += '<span style="color: #666;">已生成 ' + caseCount + ' 个用例</span>';
+                    html += '</div>';
 
                     // 如果有文件路径，直接弹出下载
                     if (filepath) {
                         const filename = filepath.split(/[/\\]/).pop();
-                        // 延迟一点弹出下载，确保页面先渲染
                         setTimeout(function() {
                             window.location.href = '/download/' + encodeURIComponent(filename);
                         }, 500);
-                        html += '<span style="color: #666;">文件: ' + filename + ' （已自动弹出下载）</span>';
                     }
 
-                    html += '</div>';
-                    html += displayContent;
                     resultDiv.innerHTML = html;
                 } else {
                     resultDiv.innerHTML = '<div class="error">' + data.message + '</div>';
                 }
+                // 重新启用按钮
+                btn.disabled = false;
+                btn.textContent = '生成测试用例';
                 loadStatus();
             })
             .catch(err => {
                 resultDiv.innerHTML = '<div class="error">生成失败: ' + err + '</div>';
+                // 重新启用按钮
+                btn.disabled = false;
+                btn.textContent = '生成测试用例';
             });
         }
 
