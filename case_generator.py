@@ -222,20 +222,26 @@ class TestCaseGenerator:
             cleaned_response = cleaned_response.strip()
 
         # 处理LLM返回实际换行符的情况：将字符串值中的实际换行符替换为\\n
-        # 这样可以让JSON解析更健壮
-        # 注意：这是一个启发式处理，可能不完美
+        cleaned_response = self._fix_json_newlines(cleaned_response)
+
+        # 尝试直接解析
         try:
-            # 尝试修复：如果有未转义的换行符在引号内，尝试转义
-            # 简单方法：将不在JSON结构中的实际换行符替换为\\n
-            import re
-            # 找到JSON数组范围
-            array_match = re.search(r'\[', cleaned_response)
-            if array_match:
-                # 简单处理：将连续多个实际换行符替换
-                # 这是一个简化处理，更好的方法是逐字符分析
-                pass
-        except:
-            pass
+            cases = json.loads(cleaned_response)
+            if isinstance(cases, list):
+                # 修复：step字段中的真实换行符替换为\\n字符串
+                for case in cases:
+                    if 'step' in case and isinstance(case['step'], str):
+                        case['step'] = case['step'].replace('\n', '\\n')
+                print(f"  成功解析JSON，获取 {len(cases)} 个用例")
+                return cases
+            else:
+                return [cases]
+        except Exception as e:
+            print(f"  JSON解析失败: {e}")
+            # JSON解析失败，尝试修复截断的JSON
+            cases = self._fix_truncated_json(cleaned_response, expected_count)
+            if cases:
+                return cases
 
         try:
             # 尝试提取JSON数组
@@ -261,134 +267,179 @@ class TestCaseGenerator:
                 return [cases]
         except Exception as e:
             print(f"  JSON解析失败: {e}")
-            # JSON解析失败，尝试正则提取完整字段
-            cases = []
+            # JSON解析失败，尝试修复截断的JSON
+            return self._fix_truncated_json(cleaned_response, expected_count)
 
-            # 尝试修复截断的JSON：查找数组的开始和结束
-            # 如果JSON被截断，尝试找到最后一个完整的对象
-            try:
-                # 查找所有可能的JSON数组边界
-                array_start = cleaned_response.find('[')
-                if array_start >= 0:
-                    # 尝试修复：找到最后一个 }
-                    last_brace = cleaned_response.rfind('}')
-                    if last_brace > array_start:
-                        # 尝试添加 ] 使JSON完整
-                        fixed_json = cleaned_response[array_start:last_brace + 1] + ']'
-                        try:
-                            fixed_cases = json.loads(fixed_json)
-                            if isinstance(fixed_cases, list) and len(fixed_cases) > 0:
-                                print(f"  修复截断JSON成功，获取 {len(fixed_cases)} 个用例")
-                                return fixed_cases
-                        except:
-                            pass
-            except Exception as fix_error:
-                print(f"  尝试修复JSON失败: {fix_error}")
+    def _fix_json_newlines(self, json_str: str) -> str:
+        """修复JSON中未转义的换行符"""
+        result = []
+        in_string = False
+        escape_next = False
+        i = 0
+        while i < len(json_str):
+            char = json_str[i]
+            if escape_next:
+                result.append(char)
+                escape_next = False
+            elif char == '\\':
+                result.append(char)
+                escape_next = True
+            elif char == '"':
+                result.append(char)
+                in_string = not in_string
+            elif char == '\n' and in_string:
+                # 在字符串内的换行符需要转义
+                result.append('\\n')
+            elif char == '\r':
+                # 忽略回车符
+                pass
+            else:
+                result.append(char)
+            i += 1
+        return ''.join(result)
 
-            # 提取每个用例块（改进的正则，处理截断情况）
-            # 使用更宽松的匹配
-            case_blocks = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_response, re.DOTALL)
+    def _fix_truncated_json(self, json_str: str, expected_count: int) -> List[Dict]:
+        """尝试修复截断的JSON"""
+        cases = []
 
+        # 方法1：找到最后一个完整的对象
+        try:
+            array_start = json_str.find('[')
+            if array_start >= 0:
+                # 找到最后一个 }
+                last_brace = json_str.rfind('}')
+                if last_brace > array_start:
+                    fixed_json = json_str[array_start:last_brace + 1] + ']'
+                    # 修复未关闭的字符串
+                    fixed_json = self._close_unclosed_strings(fixed_json)
+                    fixed_cases = json.loads(fixed_json)
+                    if isinstance(fixed_cases, list) and len(fixed_cases) > 0:
+                        print(f"  修复截断JSON成功，获取 {len(fixed_cases)} 个用例")
+                        return fixed_cases
+        except Exception as e:
+            print(f"  修复尝试1失败: {e}")
+
+        # 方法2：正则提取每个完整对象
+        try:
+            case_blocks = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', json_str, re.DOTALL)
             for block in case_blocks[:expected_count]:
-                case = {}
-
-                # 提取name
-                name_match = re.search(r'["\']?name["\']?\s*:\s*["\']([^"\']*)["\']', block)
-                if name_match:
-                    case['name'] = name_match.group(1).strip()
-
-                # 提取step_id
-                step_id_match = re.search(r'["\']?step_id["\']?\s*:\s*(\d+)', block)
-                if step_id_match:
-                    case['step_id'] = int(step_id_match.group(1))
-
-                # 提取step
-                step_match = re.search(r'["\']?step["\']?\s*:\s*["\']([^"\']*)["\']', block)
-                if step_match:
-                    case['step'] = step_match.group(1).strip()
-
-                # 提取precondition
-                precondition_match = re.search(r'["\']?precondition["\']?\s*:\s*["\']([^"\']*)["\']', block)
-                if precondition_match:
-                    case['precondition'] = precondition_match.group(1).strip()
-
-                # 提取expected
-                expected_match = re.search(r'["\']?expected["\']?\s*:\s*["\']([^"\']*)["\']', block)
-                if expected_match:
-                    case['expected'] = expected_match.group(1).strip()
-
-                # 提取priority
-                priority_match = re.search(r'["\']?priority["\']?\s*:\s*["\']([^"\']*)["\']', block)
-                if priority_match:
-                    case['priority'] = priority_match.group(1).strip()
-
-                # 必须有 step 字段且不为空，才说明是有效用例
-                if case.get('step') and case.get('step').strip():
-                    # 确保必要字段有默认值
-                    if 'step' not in case:
-                        case['step'] = ''
-                    if 'precondition' not in case:
-                        case['precondition'] = ''
-                    if 'expected' not in case:
-                        case['expected'] = ''
-                    if 'priority' not in case:
-                        case['priority'] = ''
-                    # 处理换行符：将 \\n 转换为实际换行
-                    # 注意：正则提取的内容可能包含实际的换行符，需要清理
-                    if case.get('step'):
-                        # 先替换 \\n 为 \n，再清理实际换行符（如果需要显示的话保持原样）
-                        case['step'] = case['step'].replace('\\n', '\n')
-                    if case.get('expected'):
-                        case['expected'] = case['expected'].replace('\\n', '\n')
+                case = self._extract_case_from_block(block)
+                if case and case.get('name'):
                     cases.append(case)
+            if cases:
+                print(f"  正则提取获取 {len(cases)} 个用例")
+                return cases
+        except Exception as e:
+            print(f"  修复尝试2失败: {e}")
 
-            print(f"  正则提取到 {len(cases)} 个用例")
+        return cases
 
-            # 如果仍然没有提取到，尝试更宽松的匹配
-            if not cases:
-                # 尝试按markdown格式解析（## 测试用例 x: 名称）
-                case_sections = re.split(r'##\s*测试用例\s*\d+', cleaned_response)
-                for section in case_sections[1:]:
-                    lines = section.strip().split('\n')
-                    if lines:
-                        name = lines[0].strip()
-                        if name.startswith(':') or name.startswith(' '):
-                            name = name.lstrip(': ')
+    def _close_unclosed_strings(self, json_str: str) -> str:
+        """关闭JSON中未关闭的字符串"""
+        result = []
+        in_string = False
+        escape_next = False
+        i = 0
+        while i < len(json_str):
+            char = json_str[i]
+            if escape_next:
+                result.append(char)
+                escape_next = False
+            elif char == '\\':
+                result.append(char)
+                escape_next = True
+            elif char == '"':
+                result.append(char)
+                in_string = not in_string
+            elif not in_string:
+                result.append(char)
+            i += 1
 
-                        case = {'name': name, 'steps': [], 'expected': ''}
+        # 如果字符串未关闭，添加闭合引号和括号
+        if in_string:
+            result.append('"')
+        return ''.join(result)
 
-                        # 查找测试步骤部分
-                        steps_text = ''
-                        expected_text = ''
-                        current_field = None
-                        for line in lines[1:]:
-                            if '步骤' in line:
-                                current_field = 'steps'
-                            elif '预期' in line or '结果' in line:
-                                current_field = 'expected'
-                            elif current_field == 'steps':
-                                steps_text += line.strip() + '\n'
-                            elif current_field == 'expected':
-                                expected_text += line.strip() + '\n'
+    def _extract_case_from_block(self, block: str) -> Dict:
+        """从JSON块中提取用例信息"""
+        case = {}
+        try:
+            # 尝试直接解析这个块
+            obj = json.loads(block)
+            return obj
+        except:
+            # 回退到正则提取
+            name_match = re.search(r'["\']?name["\']?\s*:\s*["\']([^"\']*)["\']', block)
+            if name_match:
+                case['name'] = name_match.group(1).strip()
+            step_id_match = re.search(r'["\']?step_id["\']?\s*:\s*(\d+)', block)
+            if step_id_match:
+                case['step_id'] = int(step_id_match.group(1))
+            step_match = re.search(r'["\']?step["\']?\s*:\s*["\']([^"\']*)["\']', block, re.DOTALL)
+            if step_match:
+                case['step'] = step_match.group(1).replace('\n', '\\n')
+            precondition_match = re.search(r'["\']?precondition["\']?\s*:\s*["\']([^"\']*)["\']', block)
+            if precondition_match:
+                case['precondition'] = precondition_match.group(1).strip()
+            priority_match = re.search(r'["\']?priority["\']?\s*:\s*["\']([^"\']*)["\']', block)
+            if priority_match:
+                case['priority'] = priority_match.group(1).strip()
+            expected_match = re.search(r'["\']?expected["\']?\s*:\s*["\']([^"\']*)["\']', block)
+            if expected_match:
+                case['expected'] = expected_match.group(1).strip()
+        return case
 
-                        if steps_text:
-                            case['steps'] = [s.strip() for s in steps_text.strip().split('\n') if s.strip()]
-                        if expected_text:
-                            case['expected'] = expected_text.strip()
+    def _merge_multi_step_cases(self, cases: List[Dict]) -> List[Dict]:
+        """合并同一个用例的多个step_id行"""
+        # 按name分组，收集所有step_id>1的步骤
+        name_to_steps = {}  # name -> [(step_id, step, expected), ...]
+        name_to_main = {}    # name -> step_id=1的完整用例
 
-                        cases.append(case)
+        for tc in cases:
+            name = tc.get('name', '')
+            step_id = tc.get('step_id', 1)
+            step = tc.get('step', '')
+            expected = tc.get('expected', '')
 
-            # 最后尝试：完全无法解析时，按行分割
-            if not cases:
-                lines = [l.strip() for l in cleaned_response.split('\n') if l.strip()]
-                for i, line in enumerate(lines[:expected_count]):
-                    cases.append({
-                        'name': line,
-                        'steps': [],
-                        'expected': ''
+            if not name:  # name为空，跳过
+                continue
+
+            if step_id == 1:
+                name_to_main[name] = tc.copy()
+                name_to_steps[name] = []
+            else:
+                if name in name_to_steps:
+                    name_to_steps[name].append((step_id, step, expected))
+
+        # 合并多步骤
+        merged_cases = []
+        for name, main_case in name_to_main.items():
+            # 添加主用例（step_id=1）
+            merged_cases.append(main_case)
+            # 添加后续步骤
+            if name in name_to_steps and name_to_steps[name]:
+                # 按step_id排序
+                name_to_steps[name].sort(key=lambda x: x[0])
+                for step_id, step, expected in name_to_steps[name]:
+                    merged_cases.append({
+                        'name': '',  # 后续步骤name为空
+                        'step_id': step_id,
+                        'step': step,
+                        'precondition': '',
+                        'priority': '',
+                        'expected': expected
                     })
 
-            return cases
+        # 添加没有对应step_id=1的孤立行
+        for tc in cases:
+            name = tc.get('name', '')
+            step_id = tc.get('step_id', 1)
+            if not name and step_id and step_id > 1:
+                # 检查是否已添加
+                merged_cases.append(tc)
+
+        print(f"  合并多步骤: {len(cases)} -> {len(merged_cases)} 行")
+        return merged_cases
 
     def _format_cases(self, cases: List[Dict]) -> str:
         """格式化测试用例为Markdown"""
@@ -486,6 +537,9 @@ class TestCaseGenerator:
             print(f"  过滤掉 {len(cases) - len(valid_cases)} 个无效用例")
         cases = valid_cases
 
+        # 合并多步骤用例：同一个name的step_id>1的行合并到step_id=1的行
+        cases = self._merge_multi_step_cases(cases)
+
         # 保存前统计用例数量
         step1_cases = [c for c in cases if c.get('step_id') == 1]
         unique_names = set(c.get('name', '') for c in cases if c.get('name', '').strip())
@@ -526,10 +580,7 @@ class TestCaseGenerator:
             name = tc.get('name', '')
             step_id = tc.get('step_id')
 
-            # 如果name为空，跳过（这可能是step_id>1的行或者是无效行）
-            if not name or not name.strip():
-                tc['_case_number'] = None
-                continue
+            # name为空时不跳过（step_id>1的行需要正常写入，只是name留空）
 
             # 如果这个name还没编号过，则编号
             if name not in seen_names:
