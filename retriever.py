@@ -181,7 +181,7 @@ class Retriever:
                 - 空/留空：默认最新版本
                 - 精确版本号：如 "20260318_123000"
                 - 关键词："最新"、"第二新"、"前3个"
-                - 文件名：如 "合同评审流程.docx"
+                - 文件名：如 "云谷开票优化开发说明书" 或 "云谷开票"
             file_hash: 可选，按文件哈希过滤（只检索指定文件的文档）
 
         Returns:
@@ -192,34 +192,119 @@ class Retriever:
 
         # 解析模糊版本输入
         filter_dict = {}
+        doc_name_priority = None  # 文档名优先匹配的标记
+
         if version:
-            # 解析模糊输入得到具体版本列表
-            matched_versions = self.parse_version_input(version)
-            if matched_versions:
-                # 使用第一个匹配的版本（最新的）
-                filter_dict['version'] = matched_versions[0]
-                print(f"版本过滤: 输入 '{version}' -> 使用版本 '{matched_versions[0]}'")
+            version = version.strip()
+
+            # 检查是否是文档名输入（可能是文件名或文档关键词）
+            is_doc_name = self._is_doc_name_input(version)
+
+            if is_doc_name:
+                # 文档名输入：优先提取标签为该文档名的文档块
+                doc_name_priority = version
+                print(f"文档名优先匹配: 输入 '{version}' -> 优先提取标签匹配的文档")
             else:
-                print(f"版本过滤: 输入 '{version}' 未匹配到任何版本，将返回空结果")
+                # 版本号输入：按原有逻辑处理
+                matched_versions = self.parse_version_input(version)
+                if matched_versions:
+                    # 使用第一个匹配的版本（最新的）
+                    filter_dict['version'] = matched_versions[0]
+                    print(f"版本过滤: 输入 '{version}' -> 使用版本 '{matched_versions[0]}'")
+                else:
+                    print(f"版本过滤: 输入 '{version}' 未匹配到任何版本，将返回空结果")
 
         if file_hash:
             filter_dict['file_hash'] = file_hash
 
         if self.use_hybrid:
-            return self._hybrid_retrieve(query, filter_dict)
+            return self._hybrid_retrieve(query, filter_dict, doc_name_priority)
         else:
             if filter_dict:
                 docs = self.retriever.invoke(query, filter=filter_dict)
             else:
                 docs = self.retriever.invoke(query)
+
+            # 文档名优先：重新排序，将标签匹配的文档排在前面
+            if doc_name_priority:
+                docs = self._boost_by_doc_name(docs, doc_name_priority)
+
             return docs[:self.top_k]
 
-    def _hybrid_retrieve(self, query: str, filter_dict: dict = None) -> List[Document]:
+    def _is_doc_name_input(self, version_input: str) -> bool:
+        """判断输入是否是文档名（而非版本号）
+
+        规则：
+        1. 如果输入匹配版本号格式（纯数字/下划线/连字符，6-20位），认为是版本号
+        2. 如果输入是文件名后缀（如.docx, .xlsx），认为是文件名
+        3. 如果输入包含中文或普通文本，且不像是版本号，则认为是文档名
+        """
+        if not version_input:
+            return False
+
+        import re
+
+        # 版本号格式：通常是 20260318_123000 或类似格式（数字为主，6-20位）
+        if re.match(r'^\d[_\-\d]{5,19}$', version_input):
+            return False
+
+        # 文件后缀
+        if version_input.lower() in ['.docx', '.doc', '.pdf', '.xlsx', '.xls', '.txt', '.md']:
+            return True
+
+        # 如果输入全是数字且较短（像日期但不像版本号）
+        if re.match(r'^\d{4,8}$', version_input):
+            return False
+
+        # 其他情况（包含中文或普通文本），认为是文档名
+        return True
+
+    def _boost_by_doc_name(self, docs: List[Document], doc_name: str) -> List[Document]:
+        """将标签中包含文档名的文档排在前面
+
+        Args:
+            docs: 文档列表
+            doc_name: 文档名（可能只是部分名称）
+
+        Returns:
+            调整顺序后的文档列表
+        """
+        if not docs or not doc_name:
+            return docs
+
+        boosted_docs = []
+        other_docs = []
+
+        for doc in docs:
+            tags = doc.metadata.get('tags', [])
+            # 检查标签是否包含文档名（支持模糊匹配）
+            tag_match = False
+            for tag in tags:
+                if doc_name in str(tag) or str(tag).startswith(doc_name) or doc_name in str(tag):
+                    tag_match = True
+                    break
+
+            if tag_match:
+                boosted_docs.append(doc)
+                doc.metadata['doc_name_match'] = True
+            else:
+                other_docs.append(doc)
+
+        # 匹配的文档排在前面
+        result = boosted_docs + other_docs
+
+        if boosted_docs:
+            print(f"文档名优先: 标签匹配 '{doc_name}' 的文档 {len(boosted_docs)} 个排在前面")
+
+        return result
+
+    def _hybrid_retrieve(self, query: str, filter_dict: dict = None, doc_name_priority: str = None) -> List[Document]:
         """混合检索：向量 + BM25
 
         Args:
             query: 查询文本
             filter_dict: 可选的过滤条件字典
+            doc_name_priority: 文档名优先匹配的标记
         """
         # 1. 向量检索
         if filter_dict:
@@ -241,7 +326,11 @@ class Retriever:
         if filter_dict:
             combined = self._filter_docs(combined, filter_dict)
 
-        # 5. 重排序
+        # 5. 文档名优先：将标签匹配的文档排在前面
+        if doc_name_priority:
+            combined = self._boost_by_doc_name(combined, doc_name_priority)
+
+        # 6. 重排序
         if self.use_rerank and len(combined) > 1:
             combined = self._rerank(query, combined)
 
@@ -580,7 +669,8 @@ class AdvancedRetriever:
         query: str,
         filter: Optional[Dict[str, Any]] = None,
         use_rerank: bool = True,
-        boost_versions: List[str] = None
+        boost_versions: List[str] = None,
+        boost_doc_name: str = None
     ) -> List[Document]:
         """多路召回 - 多个query分别检索，合并去重后重排序
 
@@ -589,6 +679,7 @@ class AdvancedRetriever:
             filter: 元数据过滤条件
             use_rerank: 是否使用重排序
             boost_version: 指定版本时，提升该版本文档的排名
+            boost_doc_name: 指定文档名时，优先提取标签为该文档名的文档
 
         Returns:
             检索到的文档列表
@@ -614,7 +705,11 @@ class AdvancedRetriever:
             except Exception as e:
                 print(f"检索查询 '{q}' 失败: {e}")
 
-        # 3. 如果指定了版本，补充检索该版本的文档
+        # 3. 文档名优先：将标签匹配的文档排在前面
+        if boost_doc_name:
+            all_docs = self.base_retriever._boost_by_doc_name(all_docs, boost_doc_name)
+
+        # 4. 如果指定了版本，补充检索该版本的文档
         if boost_versions:
             # 先提升已有文档的排名
             all_docs = self._boost_version_docs(all_docs, boost_versions)
@@ -631,7 +726,7 @@ class AdvancedRetriever:
 
             print(f"版本补充后总文档数: {len(all_docs)}")
 
-        # 4. 重排序
+        # 5. 重排序
         if use_rerank and self.cross_encoder and len(all_docs) > 1:
             all_docs = self._rerank(query, all_docs)
 

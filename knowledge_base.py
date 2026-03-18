@@ -326,7 +326,11 @@ class KnowledgeBase:
             return_context: 是否打印检索到的文档
             num_cases: 生成的测试用例数量
             examples: 用例示例，为None时从配置文件读取
-            version: 可选，版本过滤，支持模糊输入
+            version: 可选，版本过滤，支持模糊输入：
+                - 版本号：如 "20260318_123000"
+                - 关键词："最新"、"第二新"、"前3个"
+                - 文档名：如 "云谷开票优化开发说明书" 或 "云谷开票"
+                - 多个用逗号分隔
 
         Returns:
             包含结果的文件路径
@@ -338,31 +342,46 @@ class KnowledgeBase:
         filter_dict = None
         matched_versions = []
         boost_versions = []
+        boost_doc_name = None  # 文档名优先
 
         if version:
             # 支持多个关键词，用逗号分隔
             keywords = [k.strip() for k in version.split(',') if k.strip()]
-            all_matched_versions = []
 
+            # 检查是否包含纯文档名（不是版本号，不是关键词）
             for kw in keywords:
+                # 使用retriever的_is_doc_name_input判断
+                if self.retriever._is_doc_name_input(kw):
+                    # 检查是否是版本关键词
+                    version_keywords = ['最新', '最旧', '第二新', '第三新', '前', 'newest', 'oldest', 'latest']
+                    is_version_keyword = any(kw == vk or kw.startswith(vk) for vk in version_keywords)
+
+                    if not is_version_keyword:
+                        # 这是文档名输入，设置为文档名优先
+                        boost_doc_name = kw
+                        print(f"文档名优先: 输入 '{kw}' -> 优先提取标签匹配的文档")
+                        continue
+
+                # 否则按版本号处理
                 kw_versions = self.retriever.parse_version_input(kw)
                 if kw_versions:
-                    all_matched_versions.extend(kw_versions)
+                    matched_versions.extend(kw_versions)
                     boost_versions.extend(kw_versions)
                     print(f"关键词 '{kw}' 匹配版本: {kw_versions}")
                 else:
                     print(f"关键词 '{kw}' 未匹配到任何版本")
 
             # 去重
-            if all_matched_versions:
-                matched_versions = list(set(all_matched_versions))
+            if matched_versions:
+                matched_versions = list(set(matched_versions))
                 print(f"版本过滤: 输入 '{version}' -> 使用版本 {matched_versions}")
 
-        # 使用多路召回，指定提升匹配版本的排名
+        # 使用多路召回，指定提升匹配版本的排名或文档名优先
         context_docs = self.advanced_retriever.multi_query_retrieve(
             query_text,
             filter=filter_dict,
-            boost_versions=boost_versions
+            boost_versions=boost_versions,
+            boost_doc_name=boost_doc_name
         )
 
         if return_context:

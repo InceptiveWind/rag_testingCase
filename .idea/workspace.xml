@@ -1,16 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="更新模板">
+    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="代码调整">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/case_generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/case_generator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/document_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/document_loader.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/document_preprocessor.py" beforeDir="false" afterPath="$PROJECT_DIR$/document_preprocessor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/knowledge_base.py" beforeDir="false" afterPath="$PROJECT_DIR$/knowledge_base.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/retriever.py" beforeDir="false" afterPath="$PROJECT_DIR$/retriever.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/templates/case.html" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/templates/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/templates/index.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -94,7 +89,9 @@
       <workItem from="1773670219793" duration="5378000" />
       <workItem from="1773706579540" duration="29755000" />
       <workItem from="1773744094073" duration="7767000" />
-      <workItem from="1773792910747" duration="36449000" />
+      <workItem from="1773792910747" duration="36903000" />
+      <workItem from="1773836035212" duration="86000" />
+      <workItem from="1773836261093" duration="1285000" />
     </task>
     <task id="LOCAL-00001" summary="知识库创建">
       <option name="closed" value="true" />
@@ -144,7 +141,15 @@
       <option name="project" value="LOCAL" />
       <updated>1773813242089</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="代码调整">
+      <option name="closed" value="true" />
+      <created>1773835488185</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1773835488185</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -156,6 +161,7 @@
     <MESSAGE value="改写检索" />
     <MESSAGE value="各项优化" />
     <MESSAGE value="更新模板" />
-    <option name="LAST_COMMIT_MESSAGE" value="更新模板" />
+    <MESSAGE value="代码调整" />
+    <option name="LAST_COMMIT_MESSAGE" value="代码调整" />
   </component>
 </project>
