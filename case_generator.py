@@ -179,6 +179,7 @@ class TestCaseGenerator:
 9. 同一个用例可以有多个步骤组，step_id=1的行填写name和priority，step_id>1的行name和priority填空
 10. 不要在任何键的值中包含实际换行符（用\\n代替）
 11. 不要生成与已有用例名重复的测试用例
+12. 不要在返回中包含任何可导致json解析失败的符号
 
 请按以下精确JSON格式输出，只输出数组，不要有任何其他内容：
 [{{"name":"登录功能","step_id":1,"step":"1. 打开登录页面\\n2. 输入用户名\\n3. 输入密码","precondition":"系统正常运行","priority":"高","expected":"登录成功"}},{{"name":"","step_id":2,"step":"1. 点击登录按钮\\n2. 检查跳转","precondition":"","priority":"","expected":"跳转首页"}}]""".format(
@@ -244,6 +245,10 @@ class TestCaseGenerator:
                 cases = json.loads(json_str)
                 if isinstance(cases, list):
                     print(f"  成功解析JSON，获取 {len(cases)} 个用例")
+                    # 修复：step字段中的真实换行符替换为\\n字符串
+                    for case in cases:
+                        if 'step' in case and isinstance(case['step'], str):
+                            case['step'] = case['step'].replace('\n', '\\n')
                     return cases
                 else:
                     return [cases]

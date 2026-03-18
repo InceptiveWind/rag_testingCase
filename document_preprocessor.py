@@ -116,10 +116,11 @@ class DocumentPreprocessor:
         self._seen_hashes: Set[str] = set()
 
         # 初始化图片处理器
+        # 视觉描述依赖于 llm_provider 是否可用，而不是 enable_llm
         if self.enable_image_processing:
             self.image_processor = ImagePreprocessor(
                 llm_provider=llm_provider,
-                enable_vision=enable_llm
+                enable_vision=llm_provider is not None  # 只要有 LLM 提供商就启用视觉
             )
         else:
             self.image_processor = None

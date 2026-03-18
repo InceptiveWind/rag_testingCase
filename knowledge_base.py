@@ -153,7 +153,8 @@ class KnowledgeBase:
         if self.config.get('enable_preprocessor', ENABLE_PREPROCESSOR):
             preprocessor = DocumentPreprocessor(
                 enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
-                llm_provider=self.llm_provider
+                llm_provider=self.llm_provider,
+                enable_image_processing=True
             )
             documents = preprocessor.preprocess(documents)
 
@@ -287,7 +288,8 @@ class KnowledgeBase:
         if self.config.get('enable_preprocessor', ENABLE_PREPROCESSOR):
             preprocessor = DocumentPreprocessor(
                 enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
-                llm_provider=self.llm_provider
+                llm_provider=self.llm_provider,
+                enable_image_processing=True
             )
             documents = preprocessor.preprocess(documents)
 

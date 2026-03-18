@@ -184,7 +184,25 @@ class ImageDescriber:
             vision_model: 视觉模型名称
         """
         self.llm_provider = llm_provider
-        self.vision_model = vision_model or "llava:7b"
+        # 视觉模型需要单独指定，因为文本模型不支持图片
+        if vision_model:
+            self.vision_model = vision_model
+        else:
+            # 默认使用 Ollama 的 qwen3-vl 视觉模型
+            self.vision_model = "qwen3-vl:8b"
+
+        # 尝试初始化 OpenAI 客户端（用于 Ollama 视觉模型）
+        self._openai_client = None
+        try:
+            from openai import OpenAI
+            # Ollama 的 OpenAI 兼容接口需要 /v1 后缀
+            ollama_base_url = "http://localhost:11434/v1"
+            self._openai_client = OpenAI(
+                base_url=ollama_base_url,
+                api_key=""  # Ollama 不需要 API key
+            )
+        except Exception:
+            pass
 
     def describe_image(self, image: Image.Image, prompt: str = None) -> str:
         """
@@ -212,11 +230,54 @@ class ImageDescriber:
             # 构建视觉提示
             user_prompt = prompt or self.DEFAULT_PROMPT
 
-            # 使用 Ollama 视觉模型
-            response = self.llm_provider.chat(
-                f"![image](data:image/png;base64,{img_base64})\n\n{user_prompt}"
-            )
+            # 优先使用 OpenAI 兼容接口（支持视觉模型）
+            if self._openai_client:
+                try:
+                    response = self._openai_client.chat.completions.create(
+                        model=self.vision_model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": user_prompt},
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:image/png;base64,{img_base64}"}
+                                    }
+                                ]
+                            }
+                        ]
+                    )
+                    return response.choices[0].message.content
+                except Exception as e:
+                    print(f"  OpenAI 兼容接口调用失败: {e}")
 
+            # 回退：使用 Ollama /api/generate 接口（支持视觉模型）
+            try:
+                import requests
+                # 硬编码 Ollama 本地地址（视觉模型需要本地 Ollama）
+                ollama_url = "http://localhost:11434/api/generate"
+                payload = {
+                    "model": "qwen3.5:9b-q8_0",  # 使用验证过的模型
+                    "prompt": user_prompt,
+                    "images": [img_base64],
+                    "stream": False,
+                    "temperature": 0.1,
+                    "max_tokens": 1000
+                }
+                response = requests.post(ollama_url, json=payload, timeout=120)
+                if response.status_code == 200:
+                    result = response.json()
+                    return result.get("response", "")
+                else:
+                    print(f"  Ollama /api/generate 调用失败: {response.status_code}")
+            except Exception as e:
+                print(f"  Ollama /api/generate 调用失败: {e}")
+
+            # 最后回退：使用 langchain chat（可能不支持视觉）
+            response = self.llm_provider.chat(
+                f"请描述这张图片：{user_prompt}"
+            )
             return response
 
         except Exception as e:
