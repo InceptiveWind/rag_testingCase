@@ -127,9 +127,10 @@ def generate():
             return jsonify({'status': 'error', 'message': '知识库未构建，请先构建知识库'})
 
         print(f"开始生成测试用例，num_cases={num_cases}...")
-        # 生成测试用例（支持批量）
+        # 生成测试用例（examples从配置文件中读取）
         try:
-            result = kb.query(query, return_context=True, num_cases=num_cases)
+            # 使用查询改写+多路召回的AdvancedRetriever
+            result = kb.query_with_rewrite(query, return_context=True, num_cases=num_cases)
         except Exception as query_error:
             print(f"kb.query 发生错误: {query_error}")
             import traceback
@@ -225,6 +226,32 @@ def view_case(filename):
         content = f.read()
 
     return render_template('case.html', filename=filename, content=content)
+
+
+@app.route('/download/<filename>')
+def download_case(filename):
+    """下载测试用例文件"""
+    case_path = CASES_OUTPUT_DIR / filename
+
+    if not case_path.exists():
+        return "文件不存在", 404
+
+    # 根据文件类型设置MIME类型
+    if filename.endswith('.xlsx'):
+        mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    elif filename.endswith('.xls'):
+        mimetype = 'application/vnd.ms-excel'
+    elif filename.endswith('.md'):
+        mimetype = 'text/markdown'
+    else:
+        mimetype = 'application/octet-stream'
+
+    return send_from_directory(
+        CASES_OUTPUT_DIR,
+        filename,
+        as_attachment=True,
+        mimetype=mimetype
+    )
 
 
 @app.route('/status')

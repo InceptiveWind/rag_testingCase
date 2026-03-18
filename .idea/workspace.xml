@@ -1,14 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="增加支持文档">
+    <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="改写检索">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/case_generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/case_generator.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/knowledge_base.py" beforeDir="false" afterPath="$PROJECT_DIR$/knowledge_base.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/llm_provider.py" beforeDir="false" afterPath="$PROJECT_DIR$/llm_provider.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/retriever.py" beforeDir="false" afterPath="$PROJECT_DIR$/retriever.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,21 +52,21 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "git-widget-placeholder": "gaixie",
-    "ignore.virus.scanning.warn.message": "true",
-    "last_opened_file_path": "D:/Users/00795521/PycharmProjects/rag_testingCase/docs",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "http.proxy",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;gaixie&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;D:/Users/00795521/PycharmProjects/rag_testingCase/docs&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;http.proxy&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="D:\Users\00795521\PycharmProjects\rag_testingCase\docs" />
@@ -91,7 +89,8 @@
       <updated>1773670218774</updated>
       <workItem from="1773670219793" duration="5378000" />
       <workItem from="1773706579540" duration="29755000" />
-      <workItem from="1773744094073" duration="1157000" />
+      <workItem from="1773744094073" duration="7767000" />
+      <workItem from="1773792910747" duration="16623000" />
     </task>
     <task id="LOCAL-00001" summary="知识库创建">
       <option name="closed" value="true" />
@@ -117,7 +116,15 @@
       <option name="project" value="LOCAL" />
       <updated>1773728903591</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="改写检索">
+      <option name="closed" value="true" />
+      <created>1773745285806</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1773745285806</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -126,6 +133,7 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="知识库创建" />
     <MESSAGE value="增加支持文档" />
-    <option name="LAST_COMMIT_MESSAGE" value="增加支持文档" />
+    <MESSAGE value="改写检索" />
+    <option name="LAST_COMMIT_MESSAGE" value="改写检索" />
   </component>
 </project>

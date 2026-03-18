@@ -7,8 +7,16 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Union
 from langchain_core.documents import Document
+
+# Excel支持
+try:
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, Border, Side
+    EXCEL_AVAILABLE = True
+except ImportError:
+    EXCEL_AVAILABLE = False
 
 
 class TestCaseGenerator:
@@ -24,8 +32,9 @@ class TestCaseGenerator:
         query: str,
         context_docs: List[Document],
         num_cases: int = 10,
-        batch_size: int = 5,
-        max_retries: int = 3
+        batch_size: int = 10,
+        max_retries: int = 2,
+        examples: str = ""
     ) -> str:
         """
         生成测试用例（支持大批量）
@@ -36,6 +45,7 @@ class TestCaseGenerator:
             num_cases: 需要生成的测试用例数量
             batch_size: 每批生成的用例数量
             max_retries: 每批最大重试次数
+            examples: 用例示例，用于指导生成格式和风格
 
         Returns:
             生成的测试用例内容
@@ -43,6 +53,7 @@ class TestCaseGenerator:
         print(f"\n开始生成测试用例（目标: {num_cases} 个，每批 {batch_size} 个）...")
 
         all_test_cases = []
+        existing_names = []  # 记录已生成的用例名，避免重复
         batches = (num_cases + batch_size - 1) // batch_size  # 计算批次数
 
         for batch_num in range(batches):
@@ -56,26 +67,35 @@ class TestCaseGenerator:
 
             # 重试直到获得足够用例或达到最大重试次数
             while len(batch_cases) < current_batch_size and retry_count < max_retries:
-                # 调整请求数量：请求比目标多几个，以防LLM返回不足
-                request_size = current_batch_size - len(batch_cases) + 2
+                # 请求数量等于目标数量
+                request_size = current_batch_size - len(batch_cases)
                 current_start_idx = start_idx + len(batch_cases)
 
                 temp_cases = self._generate_batch(
                     query, context_docs,
                     start_idx=current_start_idx,
-                    batch_size=request_size
+                    batch_size=request_size,
+                    examples=examples,
+                    existing_names=existing_names
                 )
 
                 if temp_cases:
-                    batch_cases.extend(temp_cases)
-                    print(f"    第 {retry_count + 1} 次尝试: 请求{request_size}个, 获取 {len(temp_cases)} 个用例")
+                    # 过滤掉与已有用例重复的（根据name判断）
+                    new_cases = []
+                    for tc in temp_cases:
+                        name = tc.get('name', '').strip()
+                        if name and name not in existing_names:
+                            new_cases.append(tc)
+                            existing_names.append(name)
+                        elif name:
+                            print(f"    过滤掉重复用例: {name}")
+
+                    batch_cases.extend(new_cases)
+                    print(f"    第 {retry_count + 1} 次尝试: 请求{request_size}个, 获取 {len(temp_cases)} 个, 去重后 {len(new_cases)} 个")
                 else:
                     print(f"    第 {retry_count + 1} 次尝试: 获取 0 个用例")
 
                 retry_count += 1
-
-            # 截取目标数量的用例
-            batch_cases = batch_cases[:current_batch_size]
 
             if batch_cases:
                 all_test_cases.extend(batch_cases)
@@ -92,19 +112,34 @@ class TestCaseGenerator:
         if not all_test_cases:
             return "错误：无法生成测试用例，请检查LLM服务是否正常运行"
 
-        # 合并所有测试用例
-        final_content = self._format_cases(all_test_cases)
-        print(f"\n总计生成: {len(all_test_cases)} 个测试用例")
-        return final_content
+        # 去除重复的用例（根据name去重，保留第一个）
+        unique_cases = []
+        seen_names = set()
+        for tc in all_test_cases:
+            name = tc.get('name', '').strip()
+            if name and name not in seen_names:
+                seen_names.add(name)
+                unique_cases.append(tc)
+            elif name:
+                print(f"  去除重复用例: {name}")
+
+        print(f"\n总计生成: {len(all_test_cases)} 个测试用例，去重后: {len(unique_cases)} 个")
+
+        return unique_cases
 
     def _generate_batch(
         self,
         query: str,
         context_docs: List[Document],
         start_idx: int = 1,
-        batch_size: int = 5
+        batch_size: int = 10,
+        examples: str = "",
+        existing_names: List[str] = None
     ) -> List[Dict]:
         """生成一批测试用例"""
+        if existing_names is None:
+            existing_names = []
+
         print(f"  _generate_batch: 开始生成 {batch_size} 个用例")
         # 构建上下文
         context = "\n\n".join([
@@ -112,49 +147,80 @@ class TestCaseGenerator:
             for i, doc in enumerate(context_docs[:5])  # 最多5个文档
         ])
 
-        prompt = f"""基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
+        # 构建示例部分
+        examples_section = ""
+        if examples:
+            examples_section = "\n参考示例:\n" + examples + "\n"
+
+        # 构建已存在用例的提示
+        existing_section = ""
+        if existing_names:
+            names_str = "、".join([f'"{n}"' for n in existing_names[:20]])  # 最多显示20个
+            existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
+
+        prompt = """基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
 
 需求: {query}
-
+{examples_section}
 知识库内容:
 {context}
+{existing_section}
 
-请为每个测试用例包含以下信息：
-1. 测试用例名称
-2. 前置条件
-3. 测试步骤
-4. 预期结果
-5. 测试数据
+重要格式要求（必须严格遵守）：
+1. 输出必须是标准JSON数组格式
+2. 每个元素是一个对象，必须包含以下6个键：name、step_id、step、precondition、priority、expected
+3. name键的值只填写用例名称，不要包含任何其他内容
+4. step_id键的值只填写数字（1,2,3...），表示步骤组编号
+5. step键的值填写该步骤组的多个小步骤，用数字序号表示，步骤之间用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
+6. precondition键的值只填写前置条件
+7. priority键的值只填写"高"或"中"或"低"
+8. expected键的值只填写预期结果
+9. 同一个用例可以有多个步骤组，step_id=1的行填写name和priority，step_id>1的行name和priority填空
+10. 不要在任何键的值中包含实际换行符（用\\n代替）
+11. 不要生成与已有用例名重复的测试用例
 
-请按以下格式输出（JSON数组格式）:
-[
-  {{
-    "name": "测试用例名称",
-    "precondition": "前置条件",
-    "steps": ["步骤1", "步骤2", "步骤3"],
-    "expected": "预期结果",
-    "test_data": "测试数据"
-  }}
-]
-
-只返回JSON数组，不要其他内容。"""
+请按以下精确JSON格式输出，只输出数组，不要有任何其他内容：
+[{{"name":"登录功能","step_id":1,"step":"1. 打开登录页面\\n2. 输入用户名\\n3. 输入密码","precondition":"系统正常运行","priority":"高","expected":"登录成功"}},{{"name":"","step_id":2,"step":"1. 点击登录按钮\\n2. 检查跳转","precondition":"","priority":"","expected":"跳转首页"}}]""".format(
+            batch_size=batch_size,
+            query=query,
+            examples_section=examples_section,
+            existing_section=existing_section,
+            context=context
+        )
 
         try:
             response = self.llm_provider.chat(prompt)
 
+            # 打印完整原始响应用于调试
+            print(f"  LLM原始响应:\n{response[:2000]}")
+
             # 解析JSON响应
             cases = self._parse_json_response(response, expected_count=batch_size)
+            print(f"  解析得到 {len(cases)} 条用例")
+            for i, c in enumerate(cases[:5]):
+                print(f"    {i+1}. name='{c.get('name', '')}', step_id={c.get('step_id')}, step='{c.get('step', '')}', precondition='{c.get('precondition', '')}', priority='{c.get('priority', '')}', expected='{c.get('expected', '')}'")
             return cases
         except Exception as e:
+            import traceback
             print(f"  批次生成失败: {e}")
+            traceback.print_exc()
             return []
 
     def _parse_json_response(self, response: str, expected_count: int = 5) -> List[Dict]:
         """解析JSON响应"""
+        # 清理响应，去除markdown代码块标记
+        cleaned_response = response.strip()
+        if cleaned_response.startswith('```'):
+            # 去除 ```json 或 ``` 标记
+            lines = cleaned_response.split('\n')
+            cleaned_response = '\n'.join(lines[1:])
+            if cleaned_response.endswith('```'):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+
         try:
             # 尝试提取JSON数组
-            # 查找 [ 和 ] 之间的内容
-            match = re.search(r'\[.*\]', response, re.DOTALL)
+            match = re.search(r'\[.*\]', cleaned_response, re.DOTALL)
             if match:
                 json_str = match.group()
                 cases = json.loads(json_str)
@@ -165,43 +231,114 @@ class TestCaseGenerator:
                     return [cases]
 
             # 尝试直接解析
-            cases = json.loads(response)
+            cases = json.loads(cleaned_response)
             if isinstance(cases, list):
                 return cases
             else:
                 return [cases]
         except Exception as e:
             print(f"  JSON解析失败: {e}")
-            # JSON解析失败，尝试正则提取
+            # JSON解析失败，尝试正则提取完整字段
             cases = []
-            # 匹配每个测试用例块 - 尝试匹配完整对象
-            pattern = r'\{\s*["\']?name["\']?\s*:\s*["\']([^"\']+)["\']'
-            names = re.findall(pattern, response)
 
-            print(f"  正则提取到 {len(names)} 个用例名称")
+            # 提取每个用例块（从 { 到 }）
+            case_blocks = re.findall(r'\{[^{}]*\}', cleaned_response, re.DOTALL)
 
-            # 使用实际匹配到的数量，而不是固定5个
-            for name in names[:min(expected_count, len(names))]:
-                cases.append({
-                    "name": name.strip(),
-                    "precondition": "无",
-                    "steps": ["步骤1", "步骤2"],
-                    "expected": "符合预期",
-                    "test_data": "无"
-                })
+            for block in case_blocks[:expected_count]:
+                case = {}
+
+                # 提取name
+                name_match = re.search(r'["\']?name["\']?\s*:\s*["\']([^"\']*)["\']', block)
+                if name_match:
+                    case['name'] = name_match.group(1).strip()
+
+                # 提取step_id
+                step_id_match = re.search(r'["\']?step_id["\']?\s*:\s*(\d+)', block)
+                if step_id_match:
+                    case['step_id'] = int(step_id_match.group(1))
+
+                # 提取step
+                step_match = re.search(r'["\']?step["\']?\s*:\s*["\']([^"\']*)["\']', block)
+                if step_match:
+                    case['step'] = step_match.group(1).strip()
+
+                # 提取precondition
+                precondition_match = re.search(r'["\']?precondition["\']?\s*:\s*["\']([^"\']*)["\']', block)
+                if precondition_match:
+                    case['precondition'] = precondition_match.group(1).strip()
+
+                # 提取expected
+                expected_match = re.search(r'["\']?expected["\']?\s*:\s*["\']([^"\']*)["\']', block)
+                if expected_match:
+                    case['expected'] = expected_match.group(1).strip()
+
+                # 提取priority
+                priority_match = re.search(r'["\']?priority["\']?\s*:\s*["\']([^"\']*)["\']', block)
+                if priority_match:
+                    case['priority'] = priority_match.group(1).strip()
+
+                # 必须有 step 字段且不为空，才说明是有效用例
+                if case.get('step') and case.get('step').strip():
+                    # 确保必要字段有默认值
+                    if 'step' not in case:
+                        case['step'] = ''
+                    if 'precondition' not in case:
+                        case['precondition'] = ''
+                    if 'expected' not in case:
+                        case['expected'] = ''
+                    if 'priority' not in case:
+                        case['priority'] = ''
+                    # 处理换行符（将 \\n 转换为实际换行）
+                    if case.get('step'):
+                        case['step'] = case['step'].replace('\\n', '\n')
+                    if case.get('expected'):
+                        case['expected'] = case['expected'].replace('\\n', '\n')
+                    cases.append(case)
+
+            print(f"  正则提取到 {len(cases)} 个用例")
 
             # 如果仍然没有提取到，尝试更宽松的匹配
             if not cases:
-                # 尝试匹配任何看起来像测试用例的内容
-                pattern2 = r'(?:测试用例|testcase|case)[：:\s]*([^,\n]{2,30})'
-                names2 = re.findall(pattern2, response, re.IGNORECASE)
-                for name in names2[:min(expected_count, len(names2))]:
+                # 尝试按markdown格式解析（## 测试用例 x: 名称）
+                case_sections = re.split(r'##\s*测试用例\s*\d+', cleaned_response)
+                for section in case_sections[1:]:
+                    lines = section.strip().split('\n')
+                    if lines:
+                        name = lines[0].strip()
+                        if name.startswith(':') or name.startswith(' '):
+                            name = name.lstrip(': ')
+
+                        case = {'name': name, 'steps': [], 'expected': ''}
+
+                        # 查找测试步骤部分
+                        steps_text = ''
+                        expected_text = ''
+                        current_field = None
+                        for line in lines[1:]:
+                            if '步骤' in line:
+                                current_field = 'steps'
+                            elif '预期' in line or '结果' in line:
+                                current_field = 'expected'
+                            elif current_field == 'steps':
+                                steps_text += line.strip() + '\n'
+                            elif current_field == 'expected':
+                                expected_text += line.strip() + '\n'
+
+                        if steps_text:
+                            case['steps'] = [s.strip() for s in steps_text.strip().split('\n') if s.strip()]
+                        if expected_text:
+                            case['expected'] = expected_text.strip()
+
+                        cases.append(case)
+
+            # 最后尝试：完全无法解析时，按行分割
+            if not cases:
+                lines = [l.strip() for l in cleaned_response.split('\n') if l.strip()]
+                for i, line in enumerate(lines[:expected_count]):
                     cases.append({
-                        "name": name.strip(),
-                        "precondition": "无",
-                        "steps": ["步骤1", "步骤2"],
-                        "expected": "符合预期",
-                        "test_data": "无"
+                        'name': line,
+                        'steps': [],
+                        'expected': ''
                     })
 
             return cases
@@ -257,7 +394,7 @@ class TestCaseGenerator:
         Returns:
             追加新用例后的完整内容
         """
-        new_cases = self._generate_batch(query, context_docs, start_idx=len(existing_cases) + 1)
+        new_cases = self._generate_batch(query, context_docs, start_idx=len(existing_cases) + 1, examples="")
 
         if new_cases:
             all_cases = existing_cases + new_cases
@@ -275,6 +412,218 @@ class TestCaseGenerator:
         filepath.write_text(content, encoding='utf-8')
         print(f"\n测试用例已保存到: {filepath}")
         return filepath
+
+    def save_to_excel(self, cases: Union[List[Dict], str], filename: str = None) -> Path:
+        """保存测试用例到Excel文件
+
+        Args:
+            cases: 测试用例列表（Dict）或Markdown内容（str）
+            filename: 文件名
+
+        Returns:
+            保存的文件路径
+        """
+        if not EXCEL_AVAILABLE:
+            print("警告: openpyxl未安装，保存为Markdown格式")
+            if isinstance(cases, str):
+                return self.save_to_file(cases)
+            return self.save_to_file(self._format_cases(cases))
+
+        # 如果传入的是字符串（Markdown格式），先解析为用例列表
+        if isinstance(cases, str):
+            cases = self._parse_markdown_cases(cases)
+
+        # 过滤无效用例：必须要有step字段
+        valid_cases = [c for c in cases if c.get('step') and c.get('step').strip()]
+        if len(valid_cases) < len(cases):
+            print(f"  过滤掉 {len(cases) - len(valid_cases)} 个无效用例")
+        cases = valid_cases
+
+        # 保存前统计用例数量
+        step1_cases = [c for c in cases if c.get('step_id') == 1]
+        unique_names = set(c.get('name', '') for c in cases if c.get('name', '').strip())
+        print(f"  保存到Excel前: 共 {len(cases)} 行, step_id=1用例: {len(step1_cases)} 个, 唯一name: {len(unique_names)} 个")
+
+        if not cases:
+            print("警告: 没有测试用例可保存")
+            return self.save_to_file("无测试用例")
+
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"test_case_{timestamp}.xlsx"
+
+        filepath = self.output_dir / filename
+
+        # 读取模板文件
+        template_path = Path(__file__).parent / "templates" / "测试用例模板.xlsx"
+        try:
+            wb = openpyxl.load_workbook(str(template_path))
+            ws = wb.active
+            # 删除模板原有的空数据行，只保留表头
+        except Exception as e:
+            print(f"警告: 无法读取模板文件 {template_path}: {e}")
+            # 创建新工作簿
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "测试用例"
+
+        # 找到数据开始行（跳过表头）
+        start_row = 2
+
+        # 计算每个用例的编号（按name计数，每个唯一的name算一个用例）
+        # 同一个name的多个step_id行共享同一个编号
+        case_number = 0
+        seen_names = set()  # 用于记录已经编号过的name
+        for tc in cases:
+            name = tc.get('name', '')
+            step_id = tc.get('step_id')
+
+            # 如果name为空，跳过（这可能是step_id>1的行或者是无效行）
+            if not name or not name.strip():
+                tc['_case_number'] = None
+                continue
+
+            # 如果这个name还没编号过，则编号
+            if name not in seen_names:
+                case_number += 1
+                seen_names.add(name)
+                tc['_case_number'] = case_number
+            else:
+                # 已编号的name，不再编号
+                tc['_case_number'] = None
+
+        # 写入测试用例数据
+        for idx, tc in enumerate(cases):
+            row_idx = start_row + idx
+
+            # 获取字段值
+            step_id = tc.get('step_id')  # 默认None，不是1
+            name = tc.get('name', '')
+            precondition = tc.get('precondition', '')
+            priority = tc.get('priority', '')
+            step = tc.get('step', '')
+            expected = tc.get('expected', '')
+            case_num = tc.get('_case_number')
+
+            # 编号（第1列）- 只在 step_id=1 时填写（表示用例序号）
+            if case_num is not None:
+                ws.cell(row=row_idx, column=1, value=case_num)
+            else:
+                ws.cell(row=row_idx, column=1, value='')
+
+            # 标题（第4列）- 只在 step_id=1 时填写
+            if step_id == 1:
+                ws.cell(row=row_idx, column=4, value=name)
+            else:
+                ws.cell(row=row_idx, column=4, value='')
+
+            # 前置条件（第6列）- 每一行填写
+            ws.cell(row=row_idx, column=6, value=precondition)
+
+            # 优先级（第7列）- 只在 step_id=1 时填写
+            if step_id == 1:
+                ws.cell(row=row_idx, column=7, value=priority)
+            else:
+                ws.cell(row=row_idx, column=7, value='')
+
+            # 步骤ID（第8列）- 只有 step_id 存在时才填写
+            if step_id is not None:
+                ws.cell(row=row_idx, column=8, value=step_id)
+            else:
+                ws.cell(row=row_idx, column=8, value='')
+
+            # 步骤（第9列）- 用换行符分隔多个步骤
+            ws.cell(row=row_idx, column=9, value=step)
+
+            # 期望结果（第10列）
+            ws.cell(row=row_idx, column=10, value=expected)
+
+            # 设置行高以适应内容（根据换行符数量调整）
+            max_lines = max(step.count('\n'), expected.count('\n')) + 1
+            ws.row_dimensions[row_idx].height = max(20, max_lines * 20)
+
+        # 删除最后一条用例之后的空行（保留表头）
+        last_case_row = start_row + len(cases)
+        while ws.max_row > last_case_row:
+            ws.delete_rows(ws.max_row)
+
+        # 保存文件
+        wb.save(filepath)
+        print(f"\n测试用例已保存到: {filepath}")
+        return filepath
+
+    def _parse_markdown_cases(self, markdown_text: str) -> List[Dict]:
+        """解析Markdown格式的测试用例为字典列表"""
+        cases = []
+
+        # 提取每个测试用例块（从 ## 测试用例 到下一个 ## 或结尾）
+        pattern = r'##\s*测试用例\s*\d+:\s*(.+?)(?=\n##\s*测试用例|\Z)'
+        matches = re.findall(pattern, markdown_text, re.DOTALL)
+
+        for match in matches:
+            case = {'name': '', 'steps': [], 'expected': '', 'priority': ''}
+
+            # 按行处理
+            lines = match.strip().split('\n')
+            if not lines:
+                continue
+
+            # 第一行是标题
+            case['name'] = lines[0].strip()
+
+            # 后续行提取steps和expected
+            current_field = None
+            for line in lines[1:]:
+                line_stripped = line.strip()
+
+                # 跳过空行和分隔符
+                if not line_stripped or line_stripped == '---':
+                    continue
+
+                # 检测字段标记（如 "**测试步骤**:" 或 "**预期结果**: ..."）
+                # 需要检测是否同时包含字段名和内容（用冒号分隔）
+                if '测试步骤' in line_stripped:
+                    current_field = 'steps'
+                    # 如果冒号后面还有内容，添加到steps
+                    if ':' in line_stripped:
+                        parts = line_stripped.split(':', 1)
+                        if len(parts) > 1 and parts[1].strip():
+                            step = parts[1].strip().replace('**', '').strip()
+                            if step:
+                                case['steps'].append(step)
+                    continue
+                elif '预期结果' in line_stripped:
+                    current_field = 'expected'
+                    # 如果冒号后面还有内容，添加到expected
+                    if ':' in line_stripped:
+                        parts = line_stripped.split(':', 1)
+                        if len(parts) > 1 and parts[1].strip():
+                            exp = parts[1].strip().replace('**', '').strip()
+                            if exp:
+                                case['expected'] = exp
+                    continue
+
+                # 提取内容
+                if current_field == 'steps':
+                    # 去掉序号如 "1. " 或 "1. "
+                    step = re.sub(r'^\d+[.、]\s*', '', line_stripped)
+                    # 去掉markdown加粗标记
+                    step = step.replace('**', '').strip()
+                    if step:
+                        case['steps'].append(step)
+
+                elif current_field == 'expected':
+                    # 去掉markdown加粗标记
+                    exp = line_stripped.replace('**', '').strip()
+                    if exp:
+                        if case['expected']:
+                            case['expected'] += '\n' + exp
+                        else:
+                            case['expected'] = exp
+
+            cases.append(case)
+
+        return cases
 
     def generate_and_save(self, query: str, context_docs: List[Document]) -> Dict[str, str]:
         """生成并保存测试用例"""
