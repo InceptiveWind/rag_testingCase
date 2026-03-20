@@ -103,6 +103,13 @@ class DocumentLoader:
                 loader = loader_class(str(file_path))
             elif suffix == '.xlsx' or suffix == '.xls':
                 loader = loader_class(str(file_path))
+            elif suffix == '.csv':
+                # CSV 文件尝试多种编码
+                documents = self._load_csv_with_encoding(file_path)
+                if documents:
+                    documents = self._add_version_metadata(documents, file_path)
+                    return documents
+                return None
             else:
                 loader = loader_class(str(file_path), encoding='utf-8')
 
@@ -114,6 +121,25 @@ class DocumentLoader:
         except Exception as e:
             print(f"加载文件失败 {file_path.name}: {e}")
             return None
+
+    def _load_csv_with_encoding(self, file_path: Path) -> List[Document]:
+        """尝试多种编码加载 CSV 文件"""
+        from langchain_community.document_loaders import CSVLoader
+
+        # 尝试的编码顺序
+        encodings = ['utf-8', 'gbk', 'gb2312', 'gb18030', 'utf-8-sig', 'latin1']
+
+        for encoding in encodings:
+            try:
+                loader = CSVLoader(str(file_path), encoding=encoding)
+                documents = loader.load()
+                print(f"成功加载: {file_path.name}, 共 {len(documents)} 个文档 (编码: {encoding})")
+                return documents
+            except Exception as e:
+                continue
+
+        print(f"CSV文件所有编码尝试失败: {file_path.name}")
+        return None
 
     def _load_docx(self, file_path: Path) -> List[Document]:
         """加载 Word .docx 文件"""

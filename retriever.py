@@ -290,11 +290,95 @@ class Retriever:
             else:
                 other_docs.append(doc)
 
+        # 对标签匹配的文档按重排序分数排序（降序），确保相关性高的在前
+        if boosted_docs:
+            boosted_docs.sort(
+                key=lambda d: d.metadata.get('rerank_score', 0) if d.metadata.get('rerank_score') is not None else 0,
+                reverse=True
+            )
+
         # 匹配的文档排在前面
         result = boosted_docs + other_docs
 
         if boosted_docs:
             print(f"文档名优先: 标签匹配 '{doc_name}' 的文档 {len(boosted_docs)} 个排在前面")
+
+        return result
+
+    def _sort_by_doc_name_priority(self, docs: List[Document], doc_name: str, all_tag_matched_docs: List[Document] = None) -> List[Document]:
+        """文档名优先排序
+
+        在文档名优先模式下：
+        1. 标签匹配的文档排在前面
+        2. 同一文档的切片保持连续，按切片在文档中的顺序排列
+        3. 不同文档之间按文档名匹配程度排序
+        4. 标签不匹配的文档按混合分数排序
+
+        Args:
+            docs: 文档列表
+            doc_name: 文档名
+            all_tag_matched_docs: 所有标签匹配的文档（未使用，保留参数兼容性）
+
+        Returns:
+            排序后的文档列表
+        """
+        if not docs or not doc_name:
+            return docs
+
+        matched_docs = []
+        other_docs = []
+
+        for doc in docs:
+            tags = doc.metadata.get('tags', [])
+            tag_match = False
+            tag_match_level = 0  # 0: 包含, 1: 前缀, 2: 完全匹配
+            for tag in tags:
+                tag_str = str(tag)
+                if tag_str == doc_name:
+                    tag_match = True
+                    tag_match_level = 2
+                    break
+                elif tag_str.startswith(doc_name):
+                    tag_match = True
+                    tag_match_level = max(tag_match_level, 1)
+                elif doc_name in tag_str:
+                    tag_match = True
+                    tag_match_level = max(tag_match_level, 0)
+
+            if tag_match:
+                matched_docs.append(doc)
+                doc.metadata['doc_name_match'] = True
+                doc.metadata['tag_match_level'] = tag_match_level
+            else:
+                other_docs.append(doc)
+                doc.metadata['doc_name_match'] = False
+
+        # 对标签匹配的文档排序：
+        # 1. 先按匹配级别排序（2=完全匹配 > 1=前缀匹配 > 0=包含匹配）
+        # 2. 同一匹配级别内，按源文件名排序（保持同一文档的切片在一起）
+        # 3. 同一文档内，按原始顺序
+        if matched_docs:
+            def doc_name_sort_key(doc):
+                source = doc.metadata.get('source', '')
+                # 提取文档名（不含路径和版本号）
+                import os
+                doc_basename = os.path.basename(source)
+                # 匹配级别（越高越靠前）
+                level = -doc.metadata.get('tag_match_level', 0)
+                return (level, doc_basename)
+
+            matched_docs.sort(key=doc_name_sort_key)
+
+        # 对标签不匹配的文档按混合分数排序
+        if other_docs:
+            other_docs.sort(
+                key=lambda d: d.metadata.get('hybrid_score', 0) if d.metadata.get('hybrid_score') is not None else 0,
+                reverse=True
+            )
+
+        result = matched_docs + other_docs
+
+        print(f"文档名优先: 标签匹配 '{doc_name}' 的文档 {len(matched_docs)} 个排在前面")
 
         return result
 
@@ -306,15 +390,25 @@ class Retriever:
             filter_dict: 可选的过滤条件字典
             doc_name_priority: 文档名优先匹配的标记
         """
-        # 1. 向量检索
+        # 0. 文档名优先模式：从向量库中直接获取所有标签匹配的文档
+        all_tag_matched_docs = []
+        if doc_name_priority:
+            all_tag_matched_docs = self._get_all_docs_by_tag(doc_name_priority)
+            if all_tag_matched_docs:
+                print(f"文档名优先: 从向量库直接筛选出 {len(all_tag_matched_docs)} 个标签匹配的文档")
+
+        # 1. 向量检索（使用更大的候选集，确保标签匹配的文档能被召回）
+        k = max(self.top_k * 4, 20)  # 文档名优先模式时用更大候选集
+        search_kwargs = {"k": k}
+
         if filter_dict:
-            vector_docs = self.retriever.invoke(query, filter=filter_dict)
+            vector_docs = self.vectorstore.similarity_search(query, filter=filter_dict, **search_kwargs)
         else:
-            vector_docs = self.retriever.invoke(query)
+            vector_docs = self.vectorstore.similarity_search(query, **search_kwargs)
         vector_scores = self._get_vector_scores(vector_docs, query)
 
         # 2. BM25 检索（BM25不支持filter，后续需要处理）
-        bm25_docs, bm25_scores = self._bm25_retrieve(query)
+        bm25_docs, bm25_scores = self._bm25_retrieve(query, k=k)
 
         # 3. 合并结果
         combined = self._combine_results(
@@ -322,17 +416,29 @@ class Retriever:
             bm25_docs, bm25_scores
         )
 
+        # 3.5 文档名优先模式：补充标签匹配但未在候选集中的文档
+        if doc_name_priority and all_tag_matched_docs:
+            existing_contents = set(doc.page_content[:100] for doc in combined)
+            for doc in all_tag_matched_docs:
+                content_key = doc.page_content[:100]
+                if content_key not in existing_contents:
+                    combined.append(doc)
+                    existing_contents.add(content_key)
+            print(f"文档名优先: 补充后候选集共有 {len(combined)} 个文档")
+
         # 4. 如果有filter，在合并后再次过滤
         if filter_dict:
             combined = self._filter_docs(combined, filter_dict)
 
-        # 5. 文档名优先：将标签匹配的文档排在前面
-        if doc_name_priority:
-            combined = self._boost_by_doc_name(combined, doc_name_priority)
-
-        # 6. 重排序
-        if self.use_rerank and len(combined) > 1:
+        # 5. 重排序
+        # 注意：文档名优先模式下，跳过基于内容相关性的重排序
+        # 因为用户输入文档名是想找到该文档的内容，而不是考虑查询与内容的相关性
+        if self.use_rerank and len(combined) > 1 and not doc_name_priority:
             combined = self._rerank(query, combined)
+
+        # 6. 文档名优先：按标签匹配和文件顺序排序（不使用内容相关性重排序）
+        if doc_name_priority:
+            combined = self._sort_by_doc_name_priority(combined, doc_name_priority, all_tag_matched_docs)
 
         return combined[:self.top_k]
 
@@ -368,10 +474,13 @@ class Retriever:
             scores[doc.page_content] = 1.0 / (i + 1)
         return scores
 
-    def _bm25_retrieve(self, query: str) -> Tuple[List[Document], dict]:
+    def _bm25_retrieve(self, query: str, k: int = None) -> Tuple[List[Document], dict]:
         """BM25 检索"""
         if not self.bm25 or not self.all_docs:
             return [], {}
+
+        if k is None:
+            k = self.top_k * 2
 
         # 分词查询
         query_tokens = query.split()
@@ -380,7 +489,7 @@ class Retriever:
         scores = self.bm25.get_scores(query_tokens)
 
         # 获取 top k
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:self.top_k * 2]
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
 
         docs = []
         doc_scores = {}
@@ -390,6 +499,49 @@ class Retriever:
                 doc_scores[self.all_docs[idx].page_content] = scores[idx]
 
         return docs, doc_scores
+
+    def _get_all_docs_by_tag(self, doc_name: str) -> List[Document]:
+        """从向量库中获取所有标签匹配指定文档名的文档
+
+        Args:
+            doc_name: 文档名（可能只是部分名称）
+
+        Returns:
+            标签匹配的文档列表
+        """
+        try:
+            # 获取向量库中的所有文档
+            results = self.vectorstore.get()
+            if not results or 'documents' not in results:
+                return []
+
+            matched_docs = []
+            for i, doc_content in enumerate(results['documents']):
+                if not doc_content:
+                    continue
+
+                metadata = {}
+                if 'metadatas' in results and results['metadatas']:
+                    metadata = results['metadatas'][i] or {}
+
+                tags = metadata.get('tags', [])
+
+                # 检查标签是否包含文档名
+                for tag in tags:
+                    if doc_name in str(tag) or str(tag).startswith(doc_name) or doc_name in str(tag):
+                        matched_docs.append(Document(
+                            page_content=doc_content,
+                            metadata=metadata
+                        ))
+                        break
+
+            if matched_docs:
+                print(f"  _get_all_docs_by_tag: 找到 {len(matched_docs)} 个标签匹配的文档")
+
+            return matched_docs
+        except Exception as e:
+            print(f"  _get_all_docs_by_tag 查询失败: {e}")
+            return []
 
     def _combine_results(
         self,
@@ -705,11 +857,7 @@ class AdvancedRetriever:
             except Exception as e:
                 print(f"检索查询 '{q}' 失败: {e}")
 
-        # 3. 文档名优先：将标签匹配的文档排在前面
-        if boost_doc_name:
-            all_docs = self.base_retriever._boost_by_doc_name(all_docs, boost_doc_name)
-
-        # 4. 如果指定了版本，补充检索该版本的文档
+        # 3. 如果指定了版本，补充检索该版本的文档
         if boost_versions:
             # 先提升已有文档的排名
             all_docs = self._boost_version_docs(all_docs, boost_versions)
@@ -726,9 +874,13 @@ class AdvancedRetriever:
 
             print(f"版本补充后总文档数: {len(all_docs)}")
 
-        # 5. 重排序
+        # 4. 重排序
         if use_rerank and self.cross_encoder and len(all_docs) > 1:
             all_docs = self._rerank(query, all_docs)
+
+        # 5. 文档名优先：将标签匹配的文档排在前面（在重排序之后，确保优先级最高）
+        if boost_doc_name:
+            all_docs = self.base_retriever._boost_by_doc_name(all_docs, boost_doc_name)
 
         return all_docs[:self.top_k]
 

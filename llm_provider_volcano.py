@@ -2,7 +2,7 @@
 LLM提供商 - 火山引擎（方舟大模型）
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Union
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -112,6 +112,217 @@ class VolcanoProvider:
         except Exception as e:
             print(f"火山引擎连接失败: {e}")
             return False
+
+    def chat_with_tools(
+        self,
+        message: str,
+        tools: List[Dict[str, Any]],
+        system_prompt: Optional[str] = None,
+        tool_choice: str = "auto"
+    ) -> List[Dict[str, Any]]:
+        """使用 Function Calling 进行对话（使用原生API）
+
+        Args:
+            message: 用户消息
+            tools: 工具定义列表，每个工具包含 name, description, parameters
+            system_prompt: 系统提示词
+            tool_choice: 工具选择策略，"auto" 或 "required"
+
+        Returns:
+            函数调用结果列表，每个元素包含 tool_call_id, name, arguments
+        """
+        import requests
+
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+
+        # 构建消息
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": message})
+
+        # 转换 tools 格式（火山引擎需要 type: "function" 外层）
+        volcano_tools = []
+        for tool in tools:
+            if "type" not in tool:
+                volcano_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.get("name"),
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("parameters", {})
+                    }
+                })
+            else:
+                volcano_tools.append(tool)
+
+        # 构建请求体
+        tool_choice_config = None
+        if tool_choice == "required" and volcano_tools:
+            tool_choice_config = {
+                "type": "function",
+                "function": {"name": volcano_tools[0]["function"]["name"]}
+            }
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "tools": volcano_tools
+        }
+        if tool_choice_config:
+            payload["tool_choice"] = tool_choice_config
+
+        print(f"  调用火山引擎API (Function Calling)...")
+
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            result = response.json()
+
+            # 解析 tool_calls
+            tool_calls = result.get('choices', [{}])[0].get('message', {}).get('tool_calls', [])
+
+            results = []
+            for tool_call in tool_calls:
+                func = tool_call.get('function', {})
+                results.append({
+                    'tool_call_id': tool_call.get('id'),
+                    'name': func.get('name'),
+                    'arguments': func.get('arguments')
+                })
+
+            print(f"  API返回 {len(results)} 个工具调用")
+            return results
+
+        except requests.exceptions.Timeout:
+            print("  API调用超时")
+            return []
+        except Exception as e:
+            print(f"  API调用失败: {e}")
+            return []
+
+    def chat_with_tools_streaming(
+        self,
+        message: str,
+        tools: List[Dict[str, Any]],
+        system_prompt: Optional[str] = None
+    ):
+        """流式使用 Function Calling 进行对话（生成器）
+
+        Args:
+            message: 用户消息
+            tools: 工具定义列表
+            system_prompt: 系统提示词
+
+        Yields:
+            生成的文本片段
+        """
+        import requests
+
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+
+        # 构建消息
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": message})
+
+        # 构建请求体（流式）
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "stream": True
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=payload, stream=True, timeout=120)
+
+            for line in response.iter_lines():
+                if line:
+                    line_text = line.decode('utf-8')
+                    if line_text.startswith('data: '):
+                        data = line_text[6:]
+                        if data == '[DONE]':
+                            break
+                        # 解析 SSE 格式
+                        import json as json_module
+                        try:
+                            chunk_data = json_module.loads(data)
+                            delta = chunk_data.get('choices', [{}])[0].get('delta', {})
+                            if 'content' in delta:
+                                yield delta['content']
+                        except:
+                            continue
+        except Exception as e:
+            print(f"  流式调用失败: {e}")
+            return
+
+    def chat_streaming(
+        self,
+        message: str,
+        system_prompt: Optional[str] = None
+    ):
+        """流式对话（不使用 Function Calling，直接获取文本输出）
+
+        Args:
+            message: 用户消息
+            system_prompt: 系统提示词
+
+        Yields:
+            生成的文本片段
+        """
+        import requests
+
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+
+        # 构建消息
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": message})
+
+        # 构建请求体（流式）
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=payload, stream=True, timeout=300)
+
+            for line in response.iter_lines():
+                if line:
+                    line_text = line.decode('utf-8')
+                    if line_text.startswith('data: '):
+                        data = line_text[6:]
+                        if data == '[DONE]':
+                            break
+                        # 解析 SSE 格式
+                        import json as json_module
+                        try:
+                            chunk_data = json_module.loads(data)
+                            delta = chunk_data.get('choices', [{}])[0].get('delta', {})
+                            if 'content' in delta:
+                                yield delta['content']
+                        except:
+                            continue
+        except Exception as e:
+            print(f"  流式调用失败: {e}")
+            return
 
 
 def create_llm_provider(provider_type: str, **kwargs):

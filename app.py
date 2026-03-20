@@ -354,7 +354,27 @@ def upload_file():
                 return jsonify({'status': 'error', 'message': f'不支持的文件类型: {file.filename}'})
 
             # 保存文件到知识库目录
-            filename = secure_filename(file.filename)
+            original_filename = file.filename
+
+            # 检查是否包含中文字符（包含中文则保留原始文件名）
+            def has_chinese(s):
+                return any('\u4e00' <= c <= '\u9fff' for c in s)
+
+            if has_chinese(original_filename):
+                # 中文文件名直接保留原始名称
+                filename = original_filename
+            else:
+                filename = secure_filename(original_filename)
+                # 如果 secure_filename 处理后文件名为空或没有扩展名，保留原始文件名
+                if not filename or '.' not in filename:
+                    # 尝试从原始文件名中提取扩展名并生成有效文件名
+                    if '.' in original_filename:
+                        ext = original_filename.rsplit('.', 1)[-1].lower()
+                        import uuid
+                        filename = f"uploaded_file_{uuid.uuid4().hex[:8]}.{ext}"
+                    else:
+                        filename = original_filename
+
             file_path = KNOWLEDGE_BASE_DIR / filename
             file.save(str(file_path))
 

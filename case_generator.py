@@ -35,7 +35,8 @@ class TestCaseGenerator:
             num_cases: int = 10,
             batch_size: int = 10,
             max_retries: int = 2,
-            examples: str = ""
+            examples: str = "",
+            use_streaming: bool = True
     ) -> str:
         """
         生成测试用例（支持大批量）
@@ -47,6 +48,7 @@ class TestCaseGenerator:
             batch_size: 每批生成的用例数量
             max_retries: 每批最大重试次数
             examples: 用例示例，用于指导生成格式和风格
+            use_streaming: 是否使用流式接收模式（默认True，可获取完整JSON）
 
         Returns:
             生成的测试用例内容
@@ -68,13 +70,19 @@ class TestCaseGenerator:
             batch_cases = []
             retry_count = 0
 
+            # 选择生成方法：流式优先，回退到普通模式
+            if use_streaming:
+                generate_method = self._generate_batch_streaming
+            else:
+                generate_method = self._generate_batch
+
             # 重试直到获得足够用例或达到最大重试次数
             while len(batch_cases) < current_batch_size and retry_count < max_retries:
                 # 请求数量等于目标数量
                 request_size = current_batch_size - len(batch_cases)
                 current_start_idx = start_idx + len(batch_cases)
 
-                temp_cases = self._generate_batch(
+                temp_cases = generate_method(
                     query, context_docs,
                     start_idx=current_start_idx,
                     batch_size=request_size,
@@ -181,6 +189,13 @@ class TestCaseGenerator:
 11. 不要生成与已有用例名重复的测试用例
 12. 不要在返回中包含任何可导致json解析失败的符号
 
+【重要】JSON完整性要求（必须严格遵守，否则系统无法解析）：
+- 请务必在一次回复中返回完整的JSON数组
+- JSON数组必须以 [ 开头，以 ] 结尾
+- 每个用例对象的引号必须成对匹配
+- 确保返回内容是完整且可直接json.loads()解析的
+- 如果回复被截断，系统将无法正确解析
+
 请按以下精确JSON格式输出，只输出数组，不要有任何其他内容：
 [{{"name":"登录功能","step_id":1,"step":"1. 打开登录页面\\n2. 输入用户名\\n3. 输入密码","precondition":"系统正常运行","priority":"高","expected":"登录成功"}},{{"name":"","step_id":2,"step":"1. 点击登录按钮\\n2. 检查跳转","precondition":"","priority":"","expected":"跳转首页"}}]""".format(
             batch_size=batch_size,
@@ -190,24 +205,384 @@ class TestCaseGenerator:
             context=context
         )
 
-        try:
-            response = self.llm_provider.chat(prompt)
+        # 重试机制：最多重试次数
+        max_retries = 3
+        retry_count = 0
 
-            # 打印完整原始响应用于调试
-            print(f"  LLM原始响应:\n{response[:2000]}")
+        while retry_count < max_retries:
+            try:
+                response = self.llm_provider.chat(prompt)
+
+                # 打印完整原始响应用于调试
+                print(f"  LLM原始响应:\n{response[:2000]}")
+
+                # 检测JSON是否完整
+                if not self._is_json_complete(response):
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f"  检测到JSON可能被截断（第 {retry_count} 次重试），重新请求...")
+                        # 添加提醒到prompt中
+                        reminder = "\n\n[警告：请务必返回完整的JSON数组，以 [ 开头以 ] 结尾，不要截断！]"
+                        prompt = prompt + reminder
+                        continue
+                    else:
+                        print(f"  JSON截断重试 {max_retries} 次仍失败，尝试解析不完整JSON...")
+
+                # 解析JSON响应
+                cases = self._parse_json_response(response, expected_count=batch_size)
+
+                # 如果解析结果为空且还有重试次数，也重试
+                if not cases and retry_count < max_retries - 1:
+                    retry_count += 1
+                    print(f"  解析结果为空（第 {retry_count} 次重试），重新请求...")
+                    reminder = "\n\n[警告：请务必返回完整的JSON数组！]"
+                    prompt = prompt + reminder
+                    continue
+
+                print(f"  解析得到 {len(cases)} 条用例")
+                for i, c in enumerate(cases[:5]):
+                    print(
+                        f"    {i + 1}. name='{c.get('name', '')}', step_id={c.get('step_id')}, step='{c.get('step', '')}', precondition='{c.get('precondition', '')}', priority='{c.get('priority', '')}', expected='{c.get('expected', '')}'")
+                return cases
+            except Exception as e:
+                import traceback
+                print(f"  批次生成失败: {e}")
+                traceback.print_exc()
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"  重试中（第 {retry_count} 次）...")
+
+        return []
+
+    def _generate_batch_streaming(
+            self,
+            query: str,
+            context_docs: List[Document],
+            start_idx: int = 1,
+            batch_size: int = 10,
+            examples: str = "",
+            existing_names: List[str] = None
+    ) -> List[Dict]:
+        """使用流式接收生成一批测试用例（确保获取完整JSON）
+
+        Args:
+            query: 查询/需求
+            context_docs: 检索到的上下文文档
+            start_idx: 用例起始索引
+            batch_size: 需要生成的用例数量
+            examples: 用例示例
+            existing_names: 已存在的用例名列表
+
+        Returns:
+            解析后的用例列表
+        """
+        if existing_names is None:
+            existing_names = []
+
+        print(f"  _generate_batch_streaming: 开始生成 {batch_size} 个用例（流式接收模式）...")
+
+        # 检查是否支持流式接收
+        if not hasattr(self.llm_provider, 'chat_streaming'):
+            print("  警告: 当前LLM提供商不支持流式接收，回退到普通模式")
+            return self._generate_batch(
+                query, context_docs, start_idx, batch_size, examples, existing_names
+            )
+
+        # 构建上下文
+        context = "\n\n".join([
+            f"文档{i + 1}:\n{doc.page_content[:1000]}"
+            for i, doc in enumerate(context_docs[:5])
+        ])
+
+        # 构建示例部分
+        examples_section = ""
+        if examples:
+            examples_section = f"\n参考示例:\n{examples}\n"
+
+        # 构建已存在用例的提示
+        existing_section = ""
+        if existing_names:
+            names_str = "、".join([f'"{n}"' for n in existing_names[:20]])
+            existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
+
+        # 系统提示词 - 明确要求输出标准JSON数组格式
+        system_prompt = """你是一个专业的高级测试工程师，擅长根据需求文档生成高质量的测试用例。
+
+重要要求：
+1. 每个测试用例必须包含6个字段：name、step_id、step、precondition、priority、expected
+2. step字段中多个步骤用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
+3. 步骤中的实际换行符用\\n表示，不要有真正的换行符
+4. 同一个用例的多个步骤组，step_id=1填写name和priority，step_id>1的name和priority填空
+5. 不要生成与已有用例名重复的测试用例
+6. 【最重要】请直接返回标准JSON数组格式，不要使用markdown代码块包裹，不要使用函数调用格式"""
+
+        # 用户提示词 - 明确要求JSON数组
+        user_prompt = f"""基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
+
+需求: {query}
+{examples_section}
+知识库内容:
+{context}
+{existing_section}
+
+【重要】请直接返回标准JSON数组格式，格式如下（不要使用```包裹，不要用函数调用格式）：
+[
+  {{"name":"用例名称1","step_id":1,"step":"1. 步骤1\\n2. 步骤2","precondition":"前置条件","priority":"高","expected":"预期结果"}},
+  {{"name":"用例名称2","step_id":1,"step":"1. 步骤1\\n2. 步骤2","precondition":"前置条件","priority":"中","expected":"预期结果"}}
+]
+
+请直接输出JSON数组："""
+
+        # 打印发送给 LLM 的原始请求
+        print(f"\n{'='*80}")
+        print(f"【发送给 LLM 的原始请求】")
+        print(f"{'='*80}")
+        print(f"\n[system_prompt]:\n{system_prompt}")
+        print(f"\n[user_prompt]:\n{user_prompt}")
+        print(f"\n{'='*80}\n")
+
+        # 流式接收
+        print(f"  开始流式接收LLM响应...")
+        full_content = ""
+        chunk_count = 0
+
+        try:
+            for chunk in self.llm_provider.chat_streaming(
+                message=user_prompt,
+                system_prompt=system_prompt
+            ):
+                full_content += chunk
+                chunk_count += 1
+
+            print(f"  流式接收完成，共 {chunk_count} 个 chunks，内容长度: {len(full_content)}")
+
+            # 打印原始响应
+            print(f"  LLM原始响应（前500字符）:\n{full_content[:500]}")
 
             # 解析JSON响应
-            cases = self._parse_json_response(response, expected_count=batch_size)
+            cases = self._parse_json_response_streaming(full_content, expected_count=batch_size)
+
             print(f"  解析得到 {len(cases)} 条用例")
+            if cases:
+                for i, c in enumerate(cases[:5]):
+                    print(
+                        f"    {i + 1}. name='{c.get('name', '')}', step_id={c.get('step_id')}, step='{c.get('step', '')}', precondition='{c.get('precondition', '')}', priority='{c.get('priority', '')}', expected='{c.get('expected', '')}'")
+            return cases
+
+        except Exception as e:
+            import traceback
+            print(f"  流式批次生成失败: {e}")
+            traceback.print_exc()
+            # 回退到普通模式
+            return self._generate_batch(
+                query, context_docs, start_idx, batch_size, examples, existing_names
+            )
+
+    def _parse_json_response_streaming(self, response: str, expected_count: int = 10) -> List[Dict]:
+        """解析流式接收的JSON响应
+
+        Args:
+            response: 完整的响应内容
+            expected_count: 期望的用例数量
+
+        Returns:
+            解析后的用例列表
+        """
+        if not response or not response.strip():
+            return []
+
+        # 清理响应，去除markdown代码块标记
+        cleaned_response = response.strip()
+        if cleaned_response.startswith('```'):
+            lines = cleaned_response.split('\n')
+            cleaned_response = '\n'.join(lines[1:])
+            if cleaned_response.endswith('```'):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+
+        # 处理LLM返回实际换行符的情况
+        cleaned_response = self._fix_json_newlines(cleaned_response)
+
+        # 尝试直接解析
+        try:
+            cases = json.loads(cleaned_response)
+            if isinstance(cases, list):
+                for case in cases:
+                    if 'step' in case and isinstance(case['step'], str):
+                        case['step'] = case['step'].replace('\n', '\\n')
+                print(f"  直接解析成功，获取 {len(cases)} 个用例")
+                return cases
+            else:
+                return [cases]
+        except json.JSONDecodeError as e:
+            print(f"  JSON解析失败: {e}")
+
+        # JSON解析失败，尝试正则提取完整对象
+        cases = self._fix_truncated_json(cleaned_response, expected_count)
+        if cases:
+            return self._fix_case_newlines(cases)
+
+        return []
+
+    def _generate_batch_with_tools(
+            self,
+            query: str,
+            context_docs: List[Document],
+            start_idx: int = 1,
+            batch_size: int = 10,
+            examples: str = "",
+            existing_names: List[str] = None
+    ) -> List[Dict]:
+        """使用 Function Calling 生成一批测试用例（更可靠的方案）"""
+        if existing_names is None:
+            existing_names = []
+
+        print(f"  _generate_batch_with_tools: 开始生成 {batch_size} 个用例（Function Calling模式）...")
+
+        # 检查是否支持 Function Calling
+        if not hasattr(self.llm_provider, 'chat_with_tools'):
+            print("  警告: 当前LLM提供商不支持Function Calling，回退到普通模式")
+            return self._generate_batch(
+                query, context_docs, start_idx, batch_size, examples, existing_names
+            )
+
+        # 构建上下文
+        context = "\n\n".join([
+            f"文档{i + 1}:\n{doc.page_content[:1000]}"
+            for i, doc in enumerate(context_docs[:5])
+        ])
+
+        # 构建示例部分
+        examples_section = ""
+        if examples:
+            examples_section = f"\n参考示例:\n{examples}\n"
+
+        # 构建已存在用例的提示
+        existing_section = ""
+        if existing_names:
+            names_str = "、".join([f'"{n}"' for n in existing_names[:20]])
+            existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
+
+        # 系统提示词
+        system_prompt = """你是一个专业的高级测试工程师，擅长根据需求文档生成高质量的测试用例。
+
+重要要求：
+1. 每个测试用例必须包含6个字段：name、step_id、step、precondition、priority、expected
+2. step字段中多个步骤用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
+3. 步骤中的实际换行符用\\n表示，不要有真正的换行符
+4. 同一个用例的多个步骤组，step_id=1填写name和priority，step_id>1的name和priority填空
+5. 不要生成与已有用例名重复的测试用例"""
+
+        # 用户提示词
+        user_prompt = f"""基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
+
+需求: {query}
+{examples_section}
+知识库内容:
+{context}
+{existing_section}
+
+请使用 add_test_case 工具逐个添加测试用例。"""
+
+        # 定义工具
+        tools = [{
+            "name": "add_test_case",
+            "description": "添加一个测试用例。调用此工具将把测试用例添加到结果集中。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "测试用例名称"
+                    },
+                    "step_id": {
+                        "type": "integer",
+                        "description": "步骤组编号，1表示第一个步骤组，2表示第二个步骤组"
+                    },
+                    "step": {
+                        "type": "string",
+                        "description": "测试步骤，多个步骤用\\\\n分隔"
+                    },
+                    "precondition": {
+                        "type": "string",
+                        "description": "前置条件"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "description": "优先级：高/中/低"
+                    },
+                    "expected": {
+                        "type": "string",
+                        "description": "预期结果"
+                    }
+                },
+                "required": ["name", "step_id", "step", "precondition", "priority", "expected"]
+            }
+        }]
+
+        try:
+            # 调用 Function Calling
+            print(f"  调用Function Calling生成用例...")
+            tool_results = self.llm_provider.chat_with_tools(
+                message=user_prompt,
+                tools=tools,
+                system_prompt=system_prompt,
+                tool_choice="required"
+            )
+
+            print(f"  Function Calling返回 {len(tool_results)} 个结果")
+
+            # 打印原始响应
+            print(f"  LLM原始响应（Function Calling）:")
+            print(f"  {json.dumps(tool_results, ensure_ascii=False, indent=2)[:2000]}")
+
+            # 解析工具调用结果
+            cases = []
+            for i, result in enumerate(tool_results):
+                try:
+                    name = result.get('name', '')
+                    arguments_str = result.get('arguments', '{}')
+
+                    # 解析 JSON 参数
+                    if isinstance(arguments_str, str):
+                        args = json.loads(arguments_str)
+                    else:
+                        args = arguments_str
+
+                    case = {
+                        'name': args.get('name', ''),
+                        'step_id': args.get('step_id', 1),
+                        'step': args.get('step', ''),
+                        'precondition': args.get('precondition', ''),
+                        'priority': args.get('priority', ''),
+                        'expected': args.get('expected', '')
+                    }
+
+                    # 过滤空用例
+                    if case['name'] or case['step']:
+                        cases.append(case)
+                        print(f"    用例{i+1}: {case['name']}")
+
+                except Exception as e:
+                    print(f"    解析第{i+1}个结果失败: {e}")
+                    continue
+
+            # 打印解析后的用例详情
+            print(f"  解析得到 {len(cases)} 条用例:")
             for i, c in enumerate(cases[:5]):
                 print(
                     f"    {i + 1}. name='{c.get('name', '')}', step_id={c.get('step_id')}, step='{c.get('step', '')}', precondition='{c.get('precondition', '')}', priority='{c.get('priority', '')}', expected='{c.get('expected', '')}'")
             return cases
+
         except Exception as e:
             import traceback
-            print(f"  批次生成失败: {e}")
+            print(f"  Function Calling批次生成失败: {e}")
             traceback.print_exc()
-            return []
+            # 回退到普通模式
+            print("  回退到普通生成模式...")
+            return self._generate_batch(
+                query, context_docs, start_idx, batch_size, examples, existing_names
+            )
 
     def _parse_json_response(self, response: str, expected_count: int = 5) -> List[Dict]:
         """解析JSON响应"""
@@ -241,6 +616,8 @@ class TestCaseGenerator:
             # JSON解析失败，尝试修复截断的JSON
             cases = self._fix_truncated_json(cleaned_response, expected_count)
             if cases:
+                # 修复：所有文本字段中的真实换行符替换为\n字符串
+                cases = self._fix_case_newlines(cases)
                 return cases
 
         try:
@@ -251,24 +628,23 @@ class TestCaseGenerator:
                 cases = json.loads(json_str)
                 if isinstance(cases, list):
                     print(f"  成功解析JSON，获取 {len(cases)} 个用例")
-                    # 修复：step字段中的真实换行符替换为\\n字符串
-                    for case in cases:
-                        if 'step' in case and isinstance(case['step'], str):
-                            case['step'] = case['step'].replace('\n', '\\n')
-                    return cases
+                    # 修复：所有文本字段中的真实换行符替换为\n字符串
+                    return self._fix_case_newlines(cases)
                 else:
-                    return [cases]
+                    cases = [cases]
+                    return self._fix_case_newlines(cases)
 
             # 尝试直接解析
             cases = json.loads(cleaned_response)
             if isinstance(cases, list):
-                return cases
+                return self._fix_case_newlines(cases)
             else:
-                return [cases]
+                return self._fix_case_newlines([cases])
         except Exception as e:
             print(f"  JSON解析失败: {e}")
             # JSON解析失败，尝试修复截断的JSON
-            return self._fix_truncated_json(cleaned_response, expected_count)
+            cases = self._fix_truncated_json(cleaned_response, expected_count)
+            return self._fix_case_newlines(cases) if cases else []
 
     def _fix_json_newlines(self, json_str: str) -> str:
         """修复JSON中未转义的换行符"""
@@ -298,6 +674,56 @@ class TestCaseGenerator:
             i += 1
         return ''.join(result)
 
+    def _is_json_complete(self, json_str: str) -> bool:
+        """检测JSON字符串是否完整（可正常解析）
+
+        Args:
+            json_str: JSON字符串
+
+        Returns:
+            True if JSON is complete and valid, False otherwise
+        """
+        if not json_str or not json_str.strip():
+            return False
+
+        # 1. 检查括号平衡
+        if json_str.count('[') != json_str.count(']'):
+            return False
+        if json_str.count('{') != json_str.count('}'):
+            return False
+
+        # 2. 检查引号平衡（排除转义引号）
+        in_string = False
+        escape_next = False
+        for char in json_str:
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\':
+                escape_next = True
+                continue
+            if char == '"':
+                in_string = not in_string
+
+        if in_string:  # 引号未闭合
+            return False
+
+        # 3. 尝试解析验证
+        try:
+            json.loads(json_str)
+            return True
+        except:
+            return False
+
+    def _fix_case_newlines(self, cases: List[Dict]) -> List[Dict]:
+        """修复用例列表中所有文本字段的换行符（真实换行符转为\n字符串）"""
+        text_fields = ['name', 'step', 'precondition', 'expected', 'priority']
+        for case in cases:
+            for field in text_fields:
+                if field in case and isinstance(case[field], str):
+                    case[field] = case[field].replace('\n', '\\n')
+        return cases
+
     def _fix_truncated_json(self, json_str: str, expected_count: int) -> List[Dict]:
         """尝试修复截断的JSON"""
         cases = []
@@ -324,7 +750,8 @@ class TestCaseGenerator:
             case_blocks = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', json_str, re.DOTALL)
             for block in case_blocks[:expected_count]:
                 case = self._extract_case_from_block(block)
-                if case and case.get('name'):
+                # 只有当用例有有效 name 或 step 时才添加
+                if case and (case.get('name') or case.get('step')):
                     cases.append(case)
             if cases:
                 print(f"  正则提取获取 {len(cases)} 个用例")
@@ -603,6 +1030,13 @@ class TestCaseGenerator:
             step = tc.get('step', '')
             expected = tc.get('expected', '')
             case_num = tc.get('_case_number')
+
+            # 修复：将所有文本字段中的字面 \n 字符串替换为真正的换行符
+            # LLM 返回的文本中包含的是 \n 字符串（两个字符），需要转换
+            name = name.replace('\\n', '\n') if isinstance(name, str) else name
+            precondition = precondition.replace('\\n', '\n') if isinstance(precondition, str) else precondition
+            step = step.replace('\\n', '\n') if isinstance(step, str) else step
+            expected = expected.replace('\\n', '\n') if isinstance(expected, str) else expected
 
             # 编号（第1列）- 只在 step_id=1 时填写（表示用例序号）
             if case_num is not None:

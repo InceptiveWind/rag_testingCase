@@ -101,7 +101,7 @@ class DocumentPreprocessor:
         r'^\s*(项目经理|业务部负责人|实施顾问)\s*$',  # 签名人
     ]
 
-    def __init__(self, enable_llm: bool = False, llm_provider=None, enable_image_processing: bool = False):
+    def __init__(self, enable_llm: bool = False, llm_provider=None, enable_image_processing: bool = False, vision_provider: str = None):
         """
         初始化预处理器
 
@@ -109,6 +109,7 @@ class DocumentPreprocessor:
             enable_llm: 是否启用LLM标签生成
             llm_provider: LLM提供商实例
             enable_image_processing: 是否启用图片处理
+            vision_provider: 视觉模型提供商: "ollama" | "volcano"（可选，默认从config读取）
         """
         self.enable_llm = enable_llm
         self.llm_provider = llm_provider
@@ -120,7 +121,8 @@ class DocumentPreprocessor:
         if self.enable_image_processing:
             self.image_processor = ImagePreprocessor(
                 llm_provider=llm_provider,
-                enable_vision=llm_provider is not None  # 只要有 LLM 提供商就启用视觉
+                enable_vision=llm_provider is not None,  # 只要有 LLM 提供商就启用视觉
+                vision_provider=vision_provider
             )
         else:
             self.image_processor = None

@@ -51,6 +51,14 @@ RERANK_TOP_K = 10  # 重排序候选数量
 ENABLE_PREPROCESSOR = True  # 启用文档预处理
 ENABLE_LLM_TAG = False  # 基于规则的标签（快速）
 
+# 图片处理配置
+IMAGE_VISION_PROVIDER = "volcano"  # 视觉模型提供商: "ollama" | "volcano"
+# Ollama视觉模型配置（当 IMAGE_VISION_PROVIDER = "ollama" 时生效）
+OLLAMA_VISION_MODEL = "qwen3-vl:8b"  # Ollama视觉模型
+# 火山引擎视觉模型配置（当 IMAGE_VISION_PROVIDER = "volcano" 时生效）
+#doubao-pro-4k视觉版本
+VOLCANO_VISION_MODEL = "doubao-seed-2-0-pro"
+
 # 测试用例生成配置
 EXAMPLES = """
 示例1：

@@ -175,34 +175,61 @@ class ImageDescriber:
 
 请用中文描述。"""
 
-    def __init__(self, llm_provider=None, vision_model: str = None):
+    def __init__(self, llm_provider=None, vision_model: str = None, vision_provider: str = None):
         """
         初始化图片描述器
 
         Args:
             llm_provider: LLM提供商
-            vision_model: 视觉模型名称
+            vision_model: 视觉模型名称（可选，默认从config读取）
+            vision_provider: 视觉模型提供商: "ollama" | "volcano"（可选，默认从config读取）
         """
         self.llm_provider = llm_provider
-        # 视觉模型需要单独指定，因为文本模型不支持图片
+
+        # 从配置读取默认值
+        from config import OLLAMA_VISION_MODEL, VOLCANO_VISION_MODEL, IMAGE_VISION_PROVIDER
+
+        # 视觉模型提供商
+        self.vision_provider = vision_provider or IMAGE_VISION_PROVIDER
+
+        # 视觉模型
         if vision_model:
             self.vision_model = vision_model
+        elif self.vision_provider == "ollama":
+            self.vision_model = OLLAMA_VISION_MODEL
+        elif self.vision_provider == "volcano":
+            self.vision_model = VOLCANO_VISION_MODEL
         else:
-            # 默认使用 Ollama 的 qwen3-vl 视觉模型
-            self.vision_model = "qwen3-vl:8b"
+            self.vision_model = OLLAMA_VISION_MODEL
 
-        # 尝试初始化 OpenAI 客户端（用于 Ollama 视觉模型）
+        # 根据提供商初始化不同的客户端
         self._openai_client = None
-        try:
-            from openai import OpenAI
-            # Ollama 的 OpenAI 兼容接口需要 /v1 后缀
-            ollama_base_url = "http://localhost:11434/v1"
-            self._openai_client = OpenAI(
-                base_url=ollama_base_url,
-                api_key=""  # Ollama 不需要 API key
-            )
-        except Exception:
-            pass
+        self._volcano_client = None
+
+        if self.vision_provider == "ollama":
+            # Ollama 使用 OpenAI 兼容接口
+            try:
+                from openai import OpenAI
+                ollama_base_url = "http://localhost:11434/v1"
+                self._openai_client = OpenAI(
+                    base_url=ollama_base_url,
+                    api_key=""  # Ollama 不需要 API key
+                )
+            except Exception:
+                pass
+        elif self.vision_provider == "volcano":
+            # 火山引擎使用 OpenAI 兼容接口
+            try:
+                from openai import OpenAI
+                from config import VOLCANO_API_KEY, VOLCANO_BASE_URL
+                # 火山引擎方舟API的chat completions路径
+                volcano_base_url = VOLCANO_BASE_URL.rstrip('/')
+                self._volcano_client = OpenAI(
+                    api_key=VOLCANO_API_KEY,
+                    base_url=f"{volcano_base_url}"
+                )
+            except Exception:
+                pass
 
     def describe_image(self, image: Image.Image, prompt: str = None) -> str:
         """
@@ -215,7 +242,7 @@ class ImageDescriber:
         Returns:
             图片描述文本
         """
-        if not self.llm_provider:
+        if not self.llm_provider and not self._openai_client and not self._volcano_client:
             return self._simple_describe(image)
 
         try:
@@ -230,8 +257,31 @@ class ImageDescriber:
             # 构建视觉提示
             user_prompt = prompt or self.DEFAULT_PROMPT
 
-            # 优先使用 OpenAI 兼容接口（支持视觉模型）
-            if self._openai_client:
+            # 根据视觉模型提供商选择调用方式
+            if self.vision_provider == "volcano" and self._volcano_client:
+                # 火山引擎视觉模型
+                try:
+                    response = self._volcano_client.chat.completions.create(
+                        model=self.vision_model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": user_prompt},
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:image/png;base64,{img_base64}"}
+                                    }
+                                ]
+                            }
+                        ]
+                    )
+                    return response.choices[0].message.content
+                except Exception as e:
+                    print(f"  火山引擎视觉模型调用失败: {e}")
+
+            elif self.vision_provider == "ollama" and self._openai_client:
+                # Ollama 视觉模型（OpenAI 兼容接口）
                 try:
                     response = self._openai_client.chat.completions.create(
                         model=self.vision_model,
@@ -250,39 +300,40 @@ class ImageDescriber:
                     )
                     return response.choices[0].message.content
                 except Exception as e:
-                    print(f"  OpenAI 兼容接口调用失败: {e}")
+                    print(f"  Ollama OpenAI 兼容接口调用失败: {e}")
 
-            # 回退：使用 Ollama /api/generate 接口（支持视觉模型）
-            try:
-                import requests
-                # 硬编码 Ollama 本地地址（视觉模型需要本地 Ollama）
-                ollama_url = "http://localhost:11434/api/generate"
-                payload = {
-                    "model": "qwen3.5:9b-q8_0",  # 使用验证过的模型
-                    "prompt": user_prompt,
-                    "images": [img_base64],
-                    "stream": False,
-                    "temperature": 0.1,
-                    "max_tokens": 1000
-                }
-                response = requests.post(ollama_url, json=payload, timeout=120)
-                if response.status_code == 200:
-                    result = response.json()
-                    return result.get("response", "")
-                else:
-                    print(f"  Ollama /api/generate 调用失败: {response.status_code}")
-            except Exception as e:
-                print(f"  Ollama /api/generate 调用失败: {e}")
+                # 回退：使用 Ollama /api/generate 接口
+                try:
+                    import requests
+                    ollama_url = "http://localhost:11434/api/generate"
+                    payload = {
+                        "model": self.vision_model,
+                        "prompt": user_prompt,
+                        "images": [img_base64],
+                        "stream": False,
+                        "temperature": 0.1,
+                        "max_tokens": 1000
+                    }
+                    response = requests.post(ollama_url, json=payload, timeout=120)
+                    if response.status_code == 200:
+                        result = response.json()
+                        return result.get("response", "")
+                    else:
+                        print(f"  Ollama /api/generate 调用失败: {response.status_code}")
+                except Exception as e:
+                    print(f"  Ollama /api/generate 调用失败: {e}")
 
             # 最后回退：使用 langchain chat（可能不支持视觉）
-            response = self.llm_provider.chat(
-                f"请描述这张图片：{user_prompt}"
-            )
-            return response
+            if self.llm_provider:
+                response = self.llm_provider.chat(
+                    f"请描述这张图片：{user_prompt}"
+                )
+                return response
 
         except Exception as e:
             print(f"  图片描述生成失败: {e}")
-            return self._simple_describe(image)
+
+        return self._simple_describe(image)
 
     def describe_images_batch(self, images: List[Dict], prompt: str = None) -> List[str]:
         """
@@ -333,19 +384,20 @@ class ImageDescriber:
 class ImagePreprocessor:
     """图片预处理器 - 整合图片提取和描述"""
 
-    def __init__(self, llm_provider=None, enable_vision: bool = True):
+    def __init__(self, llm_provider=None, enable_vision: bool = True, vision_provider: str = None):
         """
         初始化图片预处理器
 
         Args:
             llm_provider: LLM提供商
             enable_vision: 是否启用视觉描述（需要视觉模型）
+            vision_provider: 视觉模型提供商: "ollama" | "volcano"（可选，默认从config读取）
         """
         self.llm_provider = llm_provider
         self.enable_vision = enable_vision
 
         self.extractor = ImageExtractor(llm_provider)
-        self.describer = ImageDescriber(llm_provider)
+        self.describer = ImageDescriber(llm_provider, vision_provider=vision_provider)
 
     def process_document(self, file_path: str, insert_descriptions: bool = True) -> List[Dict]:
         """
