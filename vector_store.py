@@ -78,8 +78,3 @@ class VectorStoreManager:
             self.vectorstore.add_documents(documents)
             print(f"已添加 {len(documents)} 个文档块")
 
-    def delete_collection(self):
-        """删除向量集合"""
-        if self.vectorstore:
-            self.vectorstore.delete_collection()
-            print(f"已删除集合: {self.collection_name}")

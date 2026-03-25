@@ -2,17 +2,18 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="63377b4c-8009-4479-9bc2-ba660ccd2b59" name="更改" comment="代码调整">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/rag_testing_case.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/rag_testing_case.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/case_generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/case_generator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/document_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/document_loader.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/document_preprocessor.py" beforeDir="false" afterPath="$PROJECT_DIR$/document_preprocessor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/image_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/image_processor.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/incremental_builder.py" beforeDir="false" afterPath="$PROJECT_DIR$/incremental_builder.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/llm_provider.py" beforeDir="false" afterPath="$PROJECT_DIR$/llm_provider.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/llm_provider_volcano.py" beforeDir="false" afterPath="$PROJECT_DIR$/llm_provider_volcano.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/retriever.py" beforeDir="false" afterPath="$PROJECT_DIR$/retriever.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/vector_store.py" beforeDir="false" afterPath="$PROJECT_DIR$/vector_store.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,7 +55,7 @@
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
     &quot;url&quot;: &quot;https://github.com/InceptiveWind/rag_testingCase.git&quot;,
-    &quot;accountId&quot;: &quot;5c35957d-44a6-400f-a854-e918999e996d&quot;
+    &quot;accountId&quot;: &quot;0e85c3f1-1068-4995-9634-9c374bba4e2d&quot;
   }
 }</component>
   <component name="ProjectColorInfo">{
@@ -68,6 +69,7 @@
   <component name="PropertiesComponent">{
   &quot;keyToString&quot;: {
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.app.executor&quot;: &quot;Run&quot;,
     &quot;Python.test.executor&quot;: &quot;Run&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
@@ -86,7 +88,31 @@
       <recent name="D:\Users\00795521\PycharmProjects\rag_testingCase\docs" />
     </key>
   </component>
-  <component name="RunManager">
+  <component name="RunManager" selected="Python.app">
+    <configuration name="app" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="rag_testing_case" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/app.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
     <configuration name="test" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="rag_testing_case" />
       <option name="ENV_FILES" value="" />
@@ -113,6 +139,7 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.app" />
         <item itemvalue="Python.test" />
       </list>
     </recent_temporary>
@@ -139,6 +166,9 @@
       <workItem from="1773836035212" duration="86000" />
       <workItem from="1773836261093" duration="1285000" />
       <workItem from="1773844100835" duration="6211000" />
+      <workItem from="1773966160158" duration="6348000" />
+      <workItem from="1774331881307" duration="1398000" />
+      <workItem from="1774403740555" duration="10301000" />
     </task>
     <task id="LOCAL-00001" summary="知识库创建">
       <option name="closed" value="true" />
@@ -204,7 +234,15 @@
       <option name="project" value="LOCAL" />
       <updated>1773849890705</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="代码调整">
+      <option name="closed" value="true" />
+      <created>1773966192324</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1773966192324</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -215,9 +253,9 @@
     <MESSAGE value="改写检索" />
     <MESSAGE value="各项优化" />
     <MESSAGE value="更新模板" />
-    <MESSAGE value="代码调整" />
     <MESSAGE value="知识库创建" />
-    <option name="LAST_COMMIT_MESSAGE" value="知识库创建" />
+    <MESSAGE value="代码调整" />
+    <option name="LAST_COMMIT_MESSAGE" value="代码调整" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
@@ -232,5 +270,6 @@
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/rag_testing_case$test.coverage" NAME="test 覆盖结果" MODIFIED="1773849108960" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/rag_testingCase$app.coverage" NAME="app 覆盖结果" MODIFIED="1774403748338" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>

@@ -288,7 +288,56 @@ class TestCaseGenerator:
                 query, context_docs, start_idx, batch_size, examples, existing_names
             )
 
-        # 构建上下文
+        # ============================================================
+        # 原有的流式模式 prompt 构建代码（已注释）
+        # ============================================================
+        # # 构建上下文
+        # context = "\n\n".join([
+        #     f"文档{i + 1}:\n{doc.page_content[:1000]}"
+        #     for i, doc in enumerate(context_docs[:5])
+        # ])
+        #
+        # # 构建示例部分
+        # examples_section = ""
+        # if examples:
+        #     examples_section = f"\n参考示例:\n{examples}\n"
+        #
+        # # 构建已存在用例的提示
+        # existing_section = ""
+        # if existing_names:
+        #     names_str = "、".join([f'"{n}"' for n in existing_names[:20]])
+        #     existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
+        #
+        # # 系统提示词 - 明确要求输出标准JSON数组格式
+        # system_prompt = """你是一个专业的高级测试工程师，擅长根据需求文档生成高质量的测试用例。
+        #
+        # 重要要求：
+        # 1. 每个测试用例必须包含6个字段：name、step_id、step、precondition、priority、expected
+        # 2. step字段中多个步骤用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
+        # 3. 步骤中的实际换行符用\\n表示，不要有真正的换行符
+        # 4. 同一个用例的多个步骤组，step_id=1填写name和priority，step_id>1的name和priority填空
+        # 5. 不要生成与已有用例名重复的测试用例
+        # 6. 【最重要】请直接返回标准JSON数组格式，不要使用markdown代码块包裹，不要使用函数调用格式"""
+        #
+        # # 用户提示词 - 明确要求JSON数组
+        # user_prompt = f"""基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
+        #
+        # 需求: {query}
+        # {examples_section}
+        # 知识库内容:
+        # {context}
+        # {existing_section}
+        #
+        # 【重要】请直接返回标准JSON数组格式，格式如下（不要使用```包裹，不要用函数调用格式）：
+        # [
+        #   {{"name":"用例名称1","step_id":1,"step":"1. 步骤1\\n2. 步骤2","precondition":"前置条件","priority":"高","expected":"预期结果"}},
+        #   {{"name":"用例名称2","step_id":1,"step":"1. 步骤1\\n2. 步骤2","precondition":"前置条件","priority":"中","expected":"预期结果"}}
+        # ]
+        #
+        # 请直接输出JSON数组："""
+        # ============================================================
+
+        # 构建上下文（与普通模式保持一致）
         context = "\n\n".join([
             f"文档{i + 1}:\n{doc.page_content[:1000]}"
             for i, doc in enumerate(context_docs[:5])
@@ -305,19 +354,8 @@ class TestCaseGenerator:
             names_str = "、".join([f'"{n}"' for n in existing_names[:20]])
             existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
 
-        # 系统提示词 - 明确要求输出标准JSON数组格式
-        system_prompt = """你是一个专业的高级测试工程师，擅长根据需求文档生成高质量的测试用例。
-
-重要要求：
-1. 每个测试用例必须包含6个字段：name、step_id、step、precondition、priority、expected
-2. step字段中多个步骤用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
-3. 步骤中的实际换行符用\\n表示，不要有真正的换行符
-4. 同一个用例的多个步骤组，step_id=1填写name和priority，step_id>1的name和priority填空
-5. 不要生成与已有用例名重复的测试用例
-6. 【最重要】请直接返回标准JSON数组格式，不要使用markdown代码块包裹，不要使用函数调用格式"""
-
-        # 用户提示词 - 明确要求JSON数组
-        user_prompt = f"""基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
+        # 统一 prompt 构建（与普通模式 _generate_batch 保持一致）
+        prompt = """基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
 
 需求: {query}
 {examples_section}
@@ -325,31 +363,51 @@ class TestCaseGenerator:
 {context}
 {existing_section}
 
-【重要】请直接返回标准JSON数组格式，格式如下（不要使用```包裹，不要用函数调用格式）：
-[
-  {{"name":"用例名称1","step_id":1,"step":"1. 步骤1\\n2. 步骤2","precondition":"前置条件","priority":"高","expected":"预期结果"}},
-  {{"name":"用例名称2","step_id":1,"step":"1. 步骤1\\n2. 步骤2","precondition":"前置条件","priority":"中","expected":"预期结果"}}
-]
+重要格式要求（必须严格遵守）：
+1. 输出必须是标准JSON数组格式
+2. 每个元素是一个对象，必须包含以下6个键：name、step_id、step、precondition、priority、expected
+3. name键的值只填写用例名称，不要包含任何其他内容
+4. step_id键的值只填写数字（1,2,3...），表示步骤组编号
+5. step键的值填写该步骤组的多个小步骤，用数字序号表示，步骤之间用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
+6. precondition键的值只填写前置条件
+7. priority键的值只填写"高"或"中"或"低"
+8. 同一个用例可以有多个步骤组，step_id=1的行填写name和priority，step_id>1的行name和priority填空
+9. 不要在任何键的值中包含实际换行符（用\\n代替）
+10. 不要生成与已有用例名重复的测试用例
+11. 不要在返回中包含任何可导致json解析失败的符号
 
-请直接输出JSON数组："""
+【重要】JSON完整性要求（必须严格遵守，否则系统无法解析）：
+- 请务必在一次回复中返回完整的JSON数组
+- JSON数组必须以 [ 开头，以 ] 结尾
+- 每个用例对象的引号必须成对匹配
+- 确保返回内容是完整且可直接json.loads()解析的
+- 如果回复被截断，系统将无法正确解析
+
+请按以下精确JSON格式输出，只输出数组，不要有任何其他内容：
+[{{"name":"登录功能","step_id":1,"step":"1. 打开登录页面\\n2. 输入用户名\\n3. 输入密码","precondition":"系统正常运行","priority":"高","expected":"登录成功"}},{{"name":"","step_id":2,"step":"1. 点击登录按钮\\n2. 检查跳转","precondition":"","priority":"","expected":"跳转首页"}}]""".format(
+            batch_size=batch_size,
+            query=query,
+            examples_section=examples_section,
+            existing_section=existing_section,
+            context=context
+        )
 
         # 打印发送给 LLM 的原始请求
         print(f"\n{'='*80}")
         print(f"【发送给 LLM 的原始请求】")
         print(f"{'='*80}")
-        print(f"\n[system_prompt]:\n{system_prompt}")
-        print(f"\n[user_prompt]:\n{user_prompt}")
+        print(f"\n[prompt]:\n{prompt}")
         print(f"\n{'='*80}\n")
 
-        # 流式接收
+        # 流式接收（使用统一后的 prompt）
         print(f"  开始流式接收LLM响应...")
         full_content = ""
         chunk_count = 0
 
         try:
             for chunk in self.llm_provider.chat_streaming(
-                message=user_prompt,
-                system_prompt=system_prompt
+                message=prompt,
+                system_prompt=None
             ):
                 full_content += chunk
                 chunk_count += 1
@@ -1167,54 +1225,3 @@ class TestCaseGenerator:
             "content": test_cases,
             "filepath": str(filepath)
         }
-
-    def format_as_pytest(self, test_case_content: str) -> str:
-        """将测试用例格式化为pytest格式"""
-        # 简单的格式化，实际使用时可以让LLM直接生成pytest格式
-        pytest_template = f'''"""
-Generated Integration Tests
-Auto-generated based on RAG knowledge base
-"""
-
-import pytest
-
-
-{test_case_content}
-'''
-        return pytest_template
-
-
-class TestCaseFormatter:
-    """测试用例格式化器"""
-
-    @staticmethod
-    def format_test_case(name: str, steps: List[str], expected: str) -> str:
-        """格式化单个测试用例"""
-        formatted_steps = "\n".join([f"    {i + 1}. {step}" for i, step in enumerate(steps)])
-
-        return f"""
-### 测试用例: {name}
-
-**测试步骤:**
-{formatted_steps}
-
-**预期结果:**
-{expected}
-"""
-
-    @staticmethod
-    def format_as_markdown(test_cases: List[Dict]) -> str:
-        """格式化为Markdown格式"""
-        md_content = "# 集成测试用例\n\n"
-        md_content += f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-
-        for tc in test_cases:
-            md_content += f"## {tc.get('name', '未命名测试用例')}\n\n"
-            md_content += f"**前置条件**: {tc.get('precondition', '无')}\n\n"
-            md_content += f"**测试步骤**:\n"
-            for i, step in enumerate(tc.get('steps', []), 1):
-                md_content += f"{i}. {step}\n"
-            md_content += f"\n**预期结果**: {tc.get('expected', '')}\n\n"
-            md_content += "---\n\n"
-
-        return md_content

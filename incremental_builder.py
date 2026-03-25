@@ -77,23 +77,6 @@ class IncrementalBuilder:
 
         return changed_files
 
-    def get_new_files(self, file_paths: List[Path]) -> List[Path]:
-        """获取新增的文件（从未处理过的文件）"""
-        all_known_files: Set[str] = set(self.file_states.keys())
-        new_files = []
-
-        for file_path in file_paths:
-            if str(file_path) not in all_known_files:
-                new_files.append(file_path)
-
-        return new_files
-
-    def get_deleted_files(self, current_files: List[Path]) -> List[str]:
-        """获取已删除的文件"""
-        current_keys = set(str(f) for f in current_files)
-        known_keys = set(self.file_states.keys())
-        return list(known_keys - current_keys)
-
     def mark_processed(self, file_paths: List[Path]):
         """标记文件已处理"""
         for file_path in file_paths:
@@ -105,28 +88,8 @@ class IncrementalBuilder:
             }
         self._save_state()
 
-    def remove_file(self, file_path: Path):
-        """移除文件记录"""
-        file_key = str(file_path)
-        if file_key in self.file_states:
-            del self.file_states[file_key]
-            self._save_state()
-
     def clear(self):
         """清除所有状态"""
         self.file_states = {}
         self._save_state()
 
-    def get_status(self) -> dict:
-        """获取状态信息"""
-        return {
-            'total_files': len(self.file_states),
-            'files': [
-                {
-                    'path': k,
-                    'processed_at': v.get('processed_at', ''),
-                    'size': v.get('size', 0)
-                }
-                for k, v in list(self.file_states.items())[:10]  # 只显示前10个
-            ]
-        }

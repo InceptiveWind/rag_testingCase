@@ -11,6 +11,7 @@ from langchain_chroma import Chroma
 # BM25
 try:
     from rank_bm25 import BM25Okapi
+    import jieba
     BM25_AVAILABLE = True
 except ImportError:
     BM25_AVAILABLE = False
@@ -152,7 +153,7 @@ class Retriever:
 
             if self.all_docs:
                 # 分词处理
-                corpus = [doc.page_content.split() for doc in self.all_docs]
+                corpus = [list(jieba.cut(doc.page_content)) for doc in self.all_docs]
                 self.bm25 = BM25Okapi(corpus)
                 print(f"BM25 初始化完成，共 {len(self.all_docs)} 篇文档")
         except Exception as e:
@@ -483,7 +484,7 @@ class Retriever:
             k = self.top_k * 2
 
         # 分词查询
-        query_tokens = query.split()
+        query_tokens = list(jieba.cut(query))
 
         # 获取 BM25 分数
         scores = self.bm25.get_scores(query_tokens)

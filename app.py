@@ -5,7 +5,7 @@ Flask Web 应用 - 测试用例生成系统
 import os
 import sys
 import secrets
-from flask import Flask, render_template, request, jsonify, redirect, url_for, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from pathlib import Path
 from werkzeug.utils import secure_filename
 

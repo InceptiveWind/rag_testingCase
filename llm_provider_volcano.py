@@ -73,37 +73,6 @@ class VolcanoProvider:
         """生成回复（chat的别名）"""
         return self.chat(prompt)
 
-    def generate_with_context(self, query: str, context_docs: List) -> str:
-        """基于上下文生成回复"""
-        # 构建上下文
-        context = "\n\n".join([
-            f"文档{i+1}:\n{doc.page_content}"
-            for i, doc in enumerate(context_docs)
-        ])
-
-        system_prompt = """你是一个专业的测试工程师，擅长根据需求文档生成高质量的测试用例。
-请根据提供的上下文信息生成测试用例，确保：
-1. 测试用例覆盖关键功能点
-2. 包含正常情况和异常情况
-3. 使用清晰的测试用例格式
-4. 测试步骤具体可执行"""
-
-        user_prompt = f"""基于以下知识库内容，为这个功能生成集成测试用例：
-
-查询需求: {query}
-
-知识库内容:
-{context}
-
-请生成完整的集成测试用例，包括：
-- 测试用例名称
-- 前置条件
-- 测试步骤
-- 预期结果
-"""
-
-        return self.chat(user_prompt, system_prompt=system_prompt)
-
     def check_connection(self) -> bool:
         """检查火山引擎服务是否可用"""
         try:
@@ -205,67 +174,6 @@ class VolcanoProvider:
             print(f"  API调用失败: {e}")
             return []
 
-    def chat_with_tools_streaming(
-        self,
-        message: str,
-        tools: List[Dict[str, Any]],
-        system_prompt: Optional[str] = None
-    ):
-        """流式使用 Function Calling 进行对话（生成器）
-
-        Args:
-            message: 用户消息
-            tools: 工具定义列表
-            system_prompt: 系统提示词
-
-        Yields:
-            生成的文本片段
-        """
-        import requests
-
-        url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-
-        # 构建消息
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": message})
-
-        # 构建请求体（流式）
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "tools": tools,
-            "stream": True
-        }
-
-        try:
-            response = requests.post(url, headers=headers, json=payload, stream=True, timeout=120)
-
-            for line in response.iter_lines():
-                if line:
-                    line_text = line.decode('utf-8')
-                    if line_text.startswith('data: '):
-                        data = line_text[6:]
-                        if data == '[DONE]':
-                            break
-                        # 解析 SSE 格式
-                        import json as json_module
-                        try:
-                            chunk_data = json_module.loads(data)
-                            delta = chunk_data.get('choices', [{}])[0].get('delta', {})
-                            if 'content' in delta:
-                                yield delta['content']
-                        except:
-                            continue
-        except Exception as e:
-            print(f"  流式调用失败: {e}")
-            return
-
     def chat_streaming(
         self,
         message: str,
@@ -323,23 +231,3 @@ class VolcanoProvider:
         except Exception as e:
             print(f"  流式调用失败: {e}")
             return
-
-
-def create_llm_provider(provider_type: str, **kwargs):
-    """
-    工厂函数：创建LLM提供商
-
-    Args:
-        provider_type: 提供商类型 ("ollama" | "volcano")
-        **kwargs: 其他参数
-
-    Returns:
-        LLM提供商实例
-    """
-    if provider_type == "volcano":
-        return VolcanoProvider(**kwargs)
-    elif provider_type == "ollama":
-        from llm_provider import OllamaProvider
-        return OllamaProvider(**kwargs)
-    else:
-        raise ValueError(f"不支持的LLM提供商类型: {provider_type}")

@@ -5,7 +5,6 @@
 import re
 from pathlib import Path
 from typing import List, Optional, Set, Dict
-from difflib import SequenceMatcher
 from langchain_core.documents import Document
 
 # 图片处理模块
@@ -746,36 +745,6 @@ class DocumentPreprocessor:
             ))
 
         return result
-
-    def _normalize_punctuation(self, text: str) -> str:
-        """规范化标点符号（全角转半角）"""
-        # 全角到半角的映射
-        fullwidth_chars = (
-            'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ'
-            'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ'
-            '０１２３４５６７８９'
-            '！？｡。＂＃＄％＆＇（）＊＋，－．／：；＜＝＞？［＼］＾＿｀｛｜｝～｟｠｢｣､、〃》「」『』【】〔〕〖〗〘〙〚〛〜〝〞〟〰〾〿–—''‛""„‟…‧﹏'
-        )
-        halfwidth_chars = (
-            'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-            'abcdefghijklmnopqrstuvwxyz'
-            '0123456789'
-            '?!。."#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~< >< ><>"\'"\'.. ..---~~.......................................................'
-        )
-
-        # 简化的全角转半角
-        translation = str.maketrans(
-            'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ'
-            'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ'
-            '０１２３４５６７８９'
-            '！？',
-            'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-            'abcdefghijklmnopqrstuvwxyz'
-            '0123456789'
-            '?!'
-        )
-
-        return text.translate(translation)
 
     def generate_tags(self, documents: List[Document]) -> List[Document]:
         """基于规则生成标签"""

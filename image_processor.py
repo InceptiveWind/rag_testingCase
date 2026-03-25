@@ -436,9 +436,3 @@ class ImagePreprocessor:
                 img_info['description'] = self.describer._simple_describe(img_info['image'])
 
         return images
-
-
-def extract_images_from_document(file_path: str, llm_provider=None) -> List[Dict]:
-    """从文档提取图片的便捷函数"""
-    processor = ImagePreprocessor(llm_provider)
-    return processor.process_document(file_path)

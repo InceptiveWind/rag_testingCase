@@ -351,54 +351,6 @@ class DocumentLoader:
 
         return '\n'.join([l for l in lines if l])
 
-    def _parse_xmind_content(self, data: dict, level: int = 0) -> str:
-        """解析 XMind 内容"""
-        lines = []
-
-        def traverse(node, depth=0):
-            if not node or not isinstance(node, dict):
-                return
-
-            # 获取主题内容
-            title = node.get('title', '')
-            if title:
-                prefix = '#' * min(depth + 1, 6)
-                lines.append(f"{prefix} {title}")
-
-            # 处理子主题
-            children = node.get('children', {})
-            if isinstance(children, dict):
-                children = children.get('topic', [])
-            elif isinstance(children, list):
-                pass  # children is already a list
-            else:
-                children = []
-
-            if isinstance(children, dict):
-                children = [children]
-            elif not isinstance(children, list):
-                children = []
-
-            for child in children:
-                if isinstance(child, dict):
-                    traverse(child, depth + 1)
-
-        # XMind content.json might be a list or dict
-        if isinstance(data, list):
-            for item in data:
-                traverse(item, 0)
-        elif isinstance(data, dict):
-            traverse(data, 0)
-
-        return '\n'.join(lines)
-
-    def _parse_xmind_summary(self, data: dict) -> str:
-        """解析 XMind 摘要"""
-        try:
-            return data.get('meta', {}).get('title', {}).get('plainText', '')
-        except:
-            return ''
-
     def _load_vsdx(self, file_path: Path) -> List[Document]:
         """加载 Visio vsdx 文件"""
         try:
