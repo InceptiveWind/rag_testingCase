@@ -38,6 +38,7 @@ from config import (
 )
 from document_loader import DocumentLoader
 from document_preprocessor import DocumentPreprocessor
+from test_scenario_splitter import TestScenarioSplitter
 from text_splitter import TextSplitter
 from vector_store import VectorStoreManager
 from retriever import Retriever, AdvancedRetriever
@@ -157,6 +158,14 @@ class KnowledgeBase:
                 enable_image_processing=True
             )
             documents = preprocessor.preprocess(documents)
+
+        # 测试场景化拆分（按章节拆分，提取测试点）
+        scenario_splitter = TestScenarioSplitter(
+            enable_llm=False,
+            llm_provider=self.llm_provider
+        )
+        documents = scenario_splitter.split_documents(documents)
+        print(f"  测试场景化拆分后: {len(documents)} 个场景切片")
 
         # 分割文档
         chunks = self.text_splitter.split_documents(documents)

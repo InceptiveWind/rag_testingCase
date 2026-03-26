@@ -4,6 +4,10 @@
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent
@@ -25,8 +29,8 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen3.5:9b-q8_0"  # 或其他你下载的模型
 
 # 火山引擎配置（当 LLM_PROVIDER = "volcano" 时生效）
-# 火山引擎API Key（从火山引擎控制台获取）
-VOLCANO_API_KEY = "87c49200-b90a-44bf-80e9-570969401a81"
+# 火山引擎API Key（从火山引擎控制台获取，使用环境变量）
+VOLCANO_API_KEY = os.environ.get("VOLCANO_API_KEY", "")
 # 火山引擎API地址
 VOLCANO_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
 # 火山引擎模型

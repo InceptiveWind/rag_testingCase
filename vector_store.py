@@ -2,7 +2,6 @@
 向量存储 - 使用Chroma存储和检索向量
 """
 
-import os
 from pathlib import Path
 from typing import List, Optional
 from langchain_core.documents import Document
