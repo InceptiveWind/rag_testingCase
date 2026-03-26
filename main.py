@@ -49,11 +49,22 @@ def main():
         action='store_true',
         help='检查Ollama连接状态'
     )
+    parser.add_argument(
+        '--enable-image',
+        type=lambda x: x.lower() == 'true',
+        default=None,
+        help='是否启用图片处理 (true/false)，不指定则使用配置文件默认值'
+    )
 
     args = parser.parse_args()
 
     # 初始化知识库
-    kb = KnowledgeBase()
+    kb_config = {
+        'docs_dir': args.docs,
+    }
+    if args.enable_image is not None:
+        kb_config['enable_image_processing'] = args.enable_image
+    kb = KnowledgeBase(config=kb_config if kb_config else None)
 
     # 检查LLM连接
     if args.check:

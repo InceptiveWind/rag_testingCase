@@ -19,7 +19,8 @@ CASES_OUTPUT_DIR = PROJECT_ROOT / "cases"  # 测试用例输出目录
 
 # Chroma配置
 COLLECTION_NAME = "test_knowledge_base"
-EMBEDDING_MODEL = "D:/models/m3e-base"  # 本地embedding模型路径
+# EMBEDDING_MODEL = "D:/models/m3e-base"  # 本地embedding模型路径
+EMBEDDING_MODEL = "D:/models/bge-small-zh-v1.5"
 
 # LLM提供商配置
 LLM_PROVIDER = "volcano"  # LLM提供商: "ollama" | "volcano"
@@ -56,6 +57,7 @@ ENABLE_PREPROCESSOR = True  # 启用文档预处理
 ENABLE_LLM_TAG = False  # 基于规则的标签（快速）
 
 # 图片处理配置
+ENABLE_IMAGE_PROCESSING = True  # 是否启用图片处理（生成图片描述）
 IMAGE_VISION_PROVIDER = "volcano"  # 视觉模型提供商: "ollama" | "volcano"
 # Ollama视觉模型配置（当 IMAGE_VISION_PROVIDER = "ollama" 时生效）
 OLLAMA_VISION_MODEL = "qwen3-vl:8b"  # Ollama视觉模型

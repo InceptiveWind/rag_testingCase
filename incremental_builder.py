@@ -47,12 +47,13 @@ class IncrementalBuilder:
 
         return hashlib.md5(key.encode()).hexdigest()
 
-    def get_changed_files(self, file_paths: List[Path]) -> List[Path]:
+    def get_changed_files(self, file_paths: List[Path], enable_image_processing: bool = None) -> List[Path]:
         """
         获取需要处理的文件列表（新增或修改的文件）
 
         Args:
             file_paths: 所有文件路径
+            enable_image_processing: 当前图片处理配置，用于判断是否需要强制重新处理
 
         Returns:
             需要处理的文件列表
@@ -74,17 +75,32 @@ class IncrementalBuilder:
 
             if current_hash != stored_hash:
                 changed_files.append(file_path)
+                continue
+
+            # 文件内容没变，检查图片处理配置是否变化
+            # 逻辑：只有当 enable_image_processing=true 且历史为 false 时才强制重新处理
+            if enable_image_processing is not None:
+                stored_image_processed = self.file_states[file_key].get('image_processed', False)
+                if enable_image_processing and not stored_image_processed:
+                    # enable_image_processing 从 false 变为 true，需要强制重新处理
+                    changed_files.append(file_path)
 
         return changed_files
 
-    def mark_processed(self, file_paths: List[Path]):
-        """标记文件已处理"""
+    def mark_processed(self, file_paths: List[Path], enable_image_processing: bool = None):
+        """标记文件已处理
+
+        Args:
+            file_paths: 需要标记的文件列表
+            enable_image_processing: 当前图片处理配置
+        """
         for file_path in file_paths:
             file_key = str(file_path)
             self.file_states[file_key] = {
                 'hash': self._get_file_hash(file_path),
                 'processed_at': datetime.now().isoformat(),
-                'size': file_path.stat().st_size
+                'size': file_path.stat().st_size,
+                'image_processed': enable_image_processing if enable_image_processing is not None else False
             }
         self._save_state()
 

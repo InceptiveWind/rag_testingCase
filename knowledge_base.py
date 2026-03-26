@@ -105,14 +105,20 @@ class KnowledgeBase:
         # 初始化增量构建器
         incremental = IncrementalBuilder()
 
-        # 获取所有支持的文件
+        # 获取所有支持的文件（支持文件和文件夹）
         from document_loader import get_supported_extensions
         all_files = []
-        for ext in get_supported_extensions():
-            all_files.extend(self.docs_dir.rglob(f'*{ext}'))
+
+        if self.docs_dir.is_file():
+            # 指定的是单个文件
+            all_files = [self.docs_dir]
+        else:
+            # 指定的是文件夹
+            for ext in get_supported_extensions():
+                all_files.extend(self.docs_dir.rglob(f'*{ext}'))
 
         if not all_files:
-            print("未找到任何文档，请先在docs目录下添加知识库文档")
+            print("未找到任何文档")
             return False
 
         # 强制重建：清除所有状态
@@ -125,8 +131,12 @@ class KnowledgeBase:
                 shutil.rmtree(self.vector_dir)
                 self.vector_dir.mkdir(parents=True, exist_ok=True)
 
+        # 获取当前图片处理配置
+        enable_image_processing = self.config.get('enable_image_processing', ENABLE_IMAGE_PROCESSING)
+        print(f"图片处理配置: {'开启' if enable_image_processing else '关闭'}")
+
         # 获取需要处理的文件（新增或修改）
-        changed_files = incremental.get_changed_files(all_files)
+        changed_files = incremental.get_changed_files(all_files, enable_image_processing=enable_image_processing)
 
         print(f"总文件数: {len(all_files)}")
         print(f"需处理文件数: {len(changed_files)}")
@@ -155,7 +165,7 @@ class KnowledgeBase:
             preprocessor = DocumentPreprocessor(
                 enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
                 llm_provider=self.llm_provider,
-                enable_image_processing=True
+                enable_image_processing=enable_image_processing
             )
             documents = preprocessor.preprocess(documents)
 
@@ -183,8 +193,8 @@ class KnowledgeBase:
             print("创建新的向量存储...")
             vectorstore = self.vector_manager.create_vectorstore(chunks)
 
-        # 标记文件已处理
-        incremental.mark_processed(changed_files)
+        # 标记文件已处理（记录图片处理状态）
+        incremental.mark_processed(changed_files, enable_image_processing=enable_image_processing)
 
         # 创建检索器
         self.retriever = self._create_retriever(vectorstore)
@@ -298,7 +308,7 @@ class KnowledgeBase:
             preprocessor = DocumentPreprocessor(
                 enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
                 llm_provider=self.llm_provider,
-                enable_image_processing=True
+                enable_image_processing=self.config.get('enable_image_processing', ENABLE_IMAGE_PROCESSING)
             )
             documents = preprocessor.preprocess(documents)
 
