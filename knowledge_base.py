@@ -35,6 +35,7 @@ from config import (
     BM25_WEIGHT,
     RERANK_TOP_K,
     EXAMPLES,
+    ENABLE_IMAGE_PROCESSING,
 )
 from document_loader import DocumentLoader
 from document_preprocessor import DocumentPreprocessor
@@ -75,7 +76,7 @@ class KnowledgeBase:
         # 使用传入的配置或默认配置
         self.config = config or {}
 
-        self.docs_dir = Path(self.config.get('docs_dir', KNOWLEDGE_BASE_DIR))
+        self.docs_dir = Path(self.config.get('docs_dir', KNOWLEDGE_BASE_DIR)).resolve()
         self.vector_dir = Path(self.config.get('vector_dir', VECTOR_STORE_DIR))
         self.output_dir = Path(self.config.get('output_dir', CASES_OUTPUT_DIR))
 

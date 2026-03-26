@@ -9,6 +9,9 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
 
+MAX_BATCH_SIZE = 5000  # ChromaDB批处理上限，留出余量
+
+
 class VectorStoreManager:
     """向量存储管理器"""
 
@@ -31,16 +34,28 @@ class VectorStoreManager:
 
         self.vectorstore: Optional[Chroma] = None
 
+    def _batch_documents(self, documents: List[Document]) -> List[List[Document]]:
+        """将文档列表分批"""
+        return [documents[i:i + MAX_BATCH_SIZE] for i in range(0, len(documents), MAX_BATCH_SIZE)]
+
     def create_vectorstore(self, documents: List[Document]) -> Chroma:
         """创建向量存储"""
         print("正在创建向量存储...")
 
-        self.vectorstore = Chroma.from_documents(
-            documents=documents,
-            embedding=self.embedding_model,
-            persist_directory=str(self.persist_directory),
-            collection_name=self.collection_name
-        )
+        batches = self._batch_documents(documents)
+        print(f"文档分批: {len(batches)} 批")
+
+        for i, batch in enumerate(batches):
+            print(f"正在处理第 {i+1}/{len(batches)} 批 ({len(batch)} 个文档)...")
+            if i == 0:
+                self.vectorstore = Chroma.from_documents(
+                    documents=batch,
+                    embedding=self.embedding_model,
+                    persist_directory=str(self.persist_directory),
+                    collection_name=self.collection_name
+                )
+            else:
+                self.vectorstore.add_documents(batch)
 
         print(f"向量存储已创建，共 {len(documents)} 个文档块")
         return self.vectorstore
@@ -69,11 +84,15 @@ class VectorStoreManager:
             return None
 
     def add_documents(self, documents: List[Document]):
-        """添加文档到向量存储"""
+        """添加文档到向量存储（分批处理）"""
         if self.vectorstore is None:
             self.load_vectorstore()
 
         if self.vectorstore:
-            self.vectorstore.add_documents(documents)
-            print(f"已添加 {len(documents)} 个文档块")
+            batches = self._batch_documents(documents)
+            total = 0
+            for i, batch in enumerate(batches):
+                self.vectorstore.add_documents(batch)
+                total += len(batch)
+                print(f"已添加第 {i+1}/{len(batches)} 批，当前累计 {total} 个文档块")
 

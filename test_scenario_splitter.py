@@ -2,6 +2,7 @@
 测试场景化拆分器 - 将文档按测试场景维度拆分，提取测试相关实体和标签
 """
 
+import json
 import re
 from typing import List, Dict, Tuple, Optional
 from langchain_core.documents import Document
@@ -130,7 +131,7 @@ class TestScenarioSplitter:
             new_metadata['section_number'] = section_num
             new_metadata['section_title'] = section_title
             new_metadata['scenario_type'] = scenario_info['scenario_type']
-            new_metadata['test_relevance'] = scenario_info
+            new_metadata['test_relevance'] = json.dumps(scenario_info, ensure_ascii=False)
             new_metadata['is_test_scenario'] = True
 
             new_doc = Document(
