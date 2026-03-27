@@ -167,7 +167,13 @@ class TestCaseGenerator:
             names_str = "、".join([f'"{n}"' for n in existing_names[:20]])  # 最多显示20个
             existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
 
-        prompt = """基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
+        prompt = """【角色设定】你是资深测试工程师，精通等价类划分、边界值分析、错误推测法、场景法，能够全面覆盖所有测试场景，输出符合规范的测试用例。
+必须覆盖以下4类场景，不得遗漏：
+   - 正常主流程：覆盖所有需求明确的正常操作路径
+   - 边界值场景：覆盖所有参数的上下临界值、枚举值、空值
+   - 异常流场景：覆盖需求明确的异常场景，以及通用测试异常（参数非法、权限不足、重复提交、网络中断、依赖服务失败等）
+   - 关联场景：覆盖和当前功能关联的其他功能的交互场景
+   基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
 
 需求: {query}
 {examples_section}
@@ -355,7 +361,13 @@ class TestCaseGenerator:
             existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
 
         # 统一 prompt 构建（与普通模式 _generate_batch 保持一致）
-        prompt = """基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
+        prompt = """【角色设定】你是资深测试工程师，精通等价类划分、边界值分析、错误推测法、场景法，能够全面覆盖所有测试场景，输出符合规范的测试用例。
+必须覆盖以下4类场景，不得遗漏：
+   - 正常主流程：覆盖所有需求明确的正常操作路径
+   - 边界值场景：覆盖所有参数的上下临界值、枚举值、空值
+   - 异常流场景：覆盖需求明确的异常场景，以及通用测试异常（参数非法、权限不足、重复提交、网络中断、依赖服务失败等）
+   - 关联场景：覆盖和当前功能关联的其他功能的交互场景
+   基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
 
 需求: {query}
 {examples_section}
@@ -481,166 +493,6 @@ class TestCaseGenerator:
             return self._fix_case_newlines(cases)
 
         return []
-
-    def _generate_batch_with_tools(
-            self,
-            query: str,
-            context_docs: List[Document],
-            start_idx: int = 1,
-            batch_size: int = 10,
-            examples: str = "",
-            existing_names: List[str] = None
-    ) -> List[Dict]:
-        """使用 Function Calling 生成一批测试用例（更可靠的方案）"""
-        if existing_names is None:
-            existing_names = []
-
-        print(f"  _generate_batch_with_tools: 开始生成 {batch_size} 个用例（Function Calling模式）...")
-
-        # 检查是否支持 Function Calling
-        if not hasattr(self.llm_provider, 'chat_with_tools'):
-            print("  警告: 当前LLM提供商不支持Function Calling，回退到普通模式")
-            return self._generate_batch(
-                query, context_docs, start_idx, batch_size, examples, existing_names
-            )
-
-        # 构建上下文
-        context = "\n\n".join([
-            f"文档{i + 1}:\n{doc.page_content[:1000]}"
-            for i, doc in enumerate(context_docs[:5])
-        ])
-
-        # 构建示例部分
-        examples_section = ""
-        if examples:
-            examples_section = f"\n参考示例:\n{examples}\n"
-
-        # 构建已存在用例的提示
-        existing_section = ""
-        if existing_names:
-            names_str = "、".join([f'"{n}"' for n in existing_names[:20]])
-            existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
-
-        # 系统提示词
-        system_prompt = """你是一个专业的高级测试工程师，擅长根据需求文档生成高质量的测试用例。
-
-重要要求：
-1. 每个测试用例必须包含6个字段：name、step_id、step、precondition、priority、expected
-2. step字段中多个步骤用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
-3. 步骤中的实际换行符用\\n表示，不要有真正的换行符
-4. 同一个用例的多个步骤组，step_id=1填写name和priority，step_id>1的name和priority填空
-5. 不要生成与已有用例名重复的测试用例"""
-
-        # 用户提示词
-        user_prompt = f"""基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
-
-需求: {query}
-{examples_section}
-知识库内容:
-{context}
-{existing_section}
-
-请使用 add_test_case 工具逐个添加测试用例。"""
-
-        # 定义工具
-        tools = [{
-            "name": "add_test_case",
-            "description": "添加一个测试用例。调用此工具将把测试用例添加到结果集中。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "测试用例名称"
-                    },
-                    "step_id": {
-                        "type": "integer",
-                        "description": "步骤组编号，1表示第一个步骤组，2表示第二个步骤组"
-                    },
-                    "step": {
-                        "type": "string",
-                        "description": "测试步骤，多个步骤用\\\\n分隔"
-                    },
-                    "precondition": {
-                        "type": "string",
-                        "description": "前置条件"
-                    },
-                    "priority": {
-                        "type": "string",
-                        "description": "优先级：高/中/低"
-                    },
-                    "expected": {
-                        "type": "string",
-                        "description": "预期结果"
-                    }
-                },
-                "required": ["name", "step_id", "step", "precondition", "priority", "expected"]
-            }
-        }]
-
-        try:
-            # 调用 Function Calling
-            print(f"  调用Function Calling生成用例...")
-            tool_results = self.llm_provider.chat_with_tools(
-                message=user_prompt,
-                tools=tools,
-                system_prompt=system_prompt,
-                tool_choice="required"
-            )
-
-            print(f"  Function Calling返回 {len(tool_results)} 个结果")
-
-            # 打印原始响应
-            print(f"  LLM原始响应（Function Calling）:")
-            print(f"  {json.dumps(tool_results, ensure_ascii=False, indent=2)[:2000]}")
-
-            # 解析工具调用结果
-            cases = []
-            for i, result in enumerate(tool_results):
-                try:
-                    name = result.get('name', '')
-                    arguments_str = result.get('arguments', '{}')
-
-                    # 解析 JSON 参数
-                    if isinstance(arguments_str, str):
-                        args = json.loads(arguments_str)
-                    else:
-                        args = arguments_str
-
-                    case = {
-                        'name': args.get('name', ''),
-                        'step_id': args.get('step_id', 1),
-                        'step': args.get('step', ''),
-                        'precondition': args.get('precondition', ''),
-                        'priority': args.get('priority', ''),
-                        'expected': args.get('expected', '')
-                    }
-
-                    # 过滤空用例
-                    if case['name'] or case['step']:
-                        cases.append(case)
-                        print(f"    用例{i+1}: {case['name']}")
-
-                except Exception as e:
-                    print(f"    解析第{i+1}个结果失败: {e}")
-                    continue
-
-            # 打印解析后的用例详情
-            print(f"  解析得到 {len(cases)} 条用例:")
-            for i, c in enumerate(cases[:5]):
-                print(
-                    f"    {i + 1}. name='{c.get('name', '')}', step_id={c.get('step_id')}, step='{c.get('step', '')}', precondition='{c.get('precondition', '')}', priority='{c.get('priority', '')}', expected='{c.get('expected', '')}'")
-            return cases
-
-        except Exception as e:
-            import traceback
-            print(f"  Function Calling批次生成失败: {e}")
-            traceback.print_exc()
-            # 回退到普通模式
-            print("  回退到普通生成模式...")
-            return self._generate_batch(
-                query, context_docs, start_idx, batch_size, examples, existing_names
-            )
 
     def _parse_json_response(self, response: str, expected_count: int = 5) -> List[Dict]:
         """解析JSON响应"""
@@ -958,33 +810,6 @@ class TestCaseGenerator:
 
         return md_content
 
-    def generate_continue(
-            self,
-            query: str,
-            context_docs: List[Document],
-            existing_cases: List[Dict],
-            continue_prompt: str = ""
-    ) -> str:
-        """
-        继续生成更多测试用例（用于上下文续写）
-
-        Args:
-            query: 查询/需求
-            context_docs: 上下文文档
-            existing_cases: 已生成的用例
-            continue_prompt: 续写提示
-
-        Returns:
-            追加新用例后的完整内容
-        """
-        new_cases = self._generate_batch(query, context_docs, start_idx=len(existing_cases) + 1, examples="")
-
-        if new_cases:
-            all_cases = existing_cases + new_cases
-            return self._format_cases(all_cases)
-
-        return self._format_cases(existing_cases)
-
     def save_to_file(self, content: str, filename: str = None) -> Path:
         """保存测试用例到文件"""
         if filename is None:
@@ -1216,12 +1041,3 @@ class TestCaseGenerator:
 
         return cases
 
-    def generate_and_save(self, query: str, context_docs: List[Document]) -> Dict[str, str]:
-        """生成并保存测试用例"""
-        test_cases = self.generate(query, context_docs)
-        filepath = self.save_to_file(test_cases)
-
-        return {
-            "content": test_cases,
-            "filepath": str(filepath)
-        }
