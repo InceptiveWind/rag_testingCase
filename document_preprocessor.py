@@ -628,12 +628,30 @@ class DocumentPreprocessor:
         return '\n'.join(cleaned_lines)
 
     def _clean_table_separators(self, content: str) -> str:
-        """清理表格分隔线"""
+        """清理表格分隔线，但保护Markdown表格"""
         lines = content.split('\n')
         cleaned_lines = []
+        in_markdown_table = False
 
         for line in lines:
             line_stripped = line.strip()
+
+            # 检测Markdown表格上下文
+            if line_stripped.startswith('|') and line_stripped.endswith('|'):
+                in_markdown_table = True
+                cleaned_lines.append(line)
+                continue
+
+            # 如果上一行是Markdown表格，当前行是分隔线则保留
+            if in_markdown_table and (line_stripped.startswith('|') or '---' in line_stripped):
+                cleaned_lines.append(line)
+                if '---' not in line_stripped and '|' not in line_stripped:
+                    in_markdown_table = False
+                continue
+
+            # 重置Markdown表格标记
+            if in_markdown_table and line_stripped and not line_stripped.startswith('|'):
+                in_markdown_table = False
 
             # 检查是否匹配表格分隔线模式
             is_separator = False
