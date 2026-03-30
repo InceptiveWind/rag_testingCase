@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 class SemanticTextSplitter:
     """语义分块器 - 按句子/段落分块，保持语义完整性"""
 
-    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 300, min_chunk_length: int = 50):
+    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 50, min_chunk_length: int = 50):
         """
         Args:
             chunk_size: 块的最大字符数
@@ -68,6 +68,8 @@ class SemanticTextSplitter:
         chunks = []
         current_chunk = ""
         current_segment_is_table = False
+        # 当前重叠内容（用于下一个chunk）
+        current_overlap = ""
 
         for seg in segments:
             seg = seg.strip()
@@ -82,36 +84,73 @@ class SemanticTextSplitter:
                                   len(current_chunk) + len(seg) + 2 > self.chunk_size):
                 # 保存当前chunk
                 if current_chunk.strip():
-                    chunks.extend(self._create_chunks(current_chunk, metadata))
+                    chunk_docs = self._create_chunks(current_chunk, metadata, current_overlap)
+                    chunks.extend(chunk_docs)
+                    # 更新重叠内容
+                    if chunk_docs:
+                        last_chunk = chunk_docs[-1].page_content
+                        current_overlap = self._calculate_semantic_overlap(last_chunk)
+                        print(f"[DEBUG split_document] 更新current_overlap (段落分割), 长度={len(current_overlap)}")
                 current_chunk = ""
+                current_overlap = ""  # 重置重叠，因为当前chunk已处理
 
             # 如果是测试用例关键结构，检查是否需要保持完整
             if is_test_case_structure:
                 if current_chunk:
-                    chunks.extend(self._create_chunks(current_chunk, metadata))
+                    chunk_docs = self._create_chunks(current_chunk, metadata, current_overlap)
+                    chunks.extend(chunk_docs)
+                    if chunk_docs:
+                        last_chunk = chunk_docs[-1].page_content
+                        current_overlap = self._calculate_semantic_overlap(last_chunk)
+                        print(f"[DEBUG split_document] 更新current_overlap (测试用例前), 长度={len(current_overlap)}")
                     current_chunk = ""
 
+                # 判断是否保持重叠
+                if not self._should_keep_overlap(seg, 'test_case'):
+                    current_overlap = ""
+                    print(f"[DEBUG split_document] 重置current_overlap (测试用例关键结构)")
+
                 if len(seg) > self.chunk_size * 1.5:
-                    chunks.extend(self._split_with_structure_preserved(seg, metadata))
+                    # 使用结构保持分割
+                    test_chunks = self._split_with_structure_preserved(seg, metadata)
+                    chunks.extend(test_chunks)
+                    if test_chunks:
+                        last_chunk = test_chunks[-1].page_content
+                        current_overlap = self._calculate_semantic_overlap(last_chunk)
                 else:
                     chunks.append(self._create_chunk_doc(seg, metadata))
+                    current_overlap = self._calculate_semantic_overlap(seg)
                 current_segment_is_table = False
             elif is_table:
                 # 表格：保持完整，不与其他内容混合
                 if current_chunk:
-                    chunks.extend(self._create_chunks(current_chunk, metadata))
+                    chunk_docs = self._create_chunks(current_chunk, metadata, current_overlap)
+                    chunks.extend(chunk_docs)
+                    if chunk_docs:
+                        last_chunk = chunk_docs[-1].page_content
+                        current_overlap = self._calculate_semantic_overlap(last_chunk)
+                        print(f"[DEBUG split_document] 更新current_overlap (表格前), 长度={len(current_overlap)}")
                     current_chunk = ""
+
+                # 判断是否保持重叠
+                if not self._should_keep_overlap(seg, 'table'):
+                    current_overlap = ""
+                    print(f"[DEBUG split_document] 重置current_overlap (表格)")
 
                 # 检查表格是否超长
                 if len(seg) > self.chunk_size:
                     # 按行分割表格但保持结构
                     table_chunks = self._split_table_preserve(seg, metadata)
                     chunks.extend(table_chunks)
+                    if table_chunks:
+                        last_chunk = table_chunks[-1].page_content
+                        current_overlap = self._calculate_semantic_overlap(last_chunk)
                 else:
                     chunks.append(self._create_chunk_doc(seg, metadata))
+                    current_overlap = self._calculate_semantic_overlap(seg)
                 current_segment_is_table = False
             else:
-                # 普通段落
+                # 普通段落：累积到current_chunk
                 if current_chunk:
                     current_chunk += "\n\n"
                 current_chunk += seg
@@ -119,7 +158,7 @@ class SemanticTextSplitter:
 
         # 处理最后一个chunk
         if current_chunk:
-            chunks.extend(self._create_chunks(current_chunk, metadata))
+            chunks.extend(self._create_chunks(current_chunk, metadata, current_overlap))
 
         # 标记chunk类型
         for i, chunk in enumerate(chunks):
@@ -358,44 +397,255 @@ class SemanticTextSplitter:
 
         return sentences
 
-    def _create_chunks(self, text: str, metadata: dict) -> List[Document]:
-        """创建chunks，处理重叠和过短问题"""
+    def _split_into_sub_clauses(self, text: str) -> List[str]:
+        """将超长句子按子句分割（逗号、顿号、分号）"""
+        sub_clauses = []
+        current = ""
+        # 子句分隔符：中文逗号、顿号、分号 + 英文逗号、分号
+        sub_delimiters = '，、；,;'
+
+        for char in text:
+            current += char
+            if char in sub_delimiters:
+                sub_clauses.append(current)
+                current = ""
+
+        if current.strip():
+            sub_clauses.append(current)
+
+        return sub_clauses if sub_clauses else [text]
+
+    def _find_semantic_boundary(self, text: str, start_pos: int, direction: str = 'backward') -> int:
+        """查找最近的语义边界位置
+
+        Args:
+            text: 文本内容
+            start_pos: 起始位置（字符索引）
+            direction: 'backward'向后查找，'forward'向前查找
+
+        Returns:
+            边界位置索引，找不到则返回-1
+        """
+        if start_pos < 0 or start_pos > len(text):
+            return -1
+
+        # 句子结束符：。！？.!?
+        sentence_endings = '。！？.!?'
+        # 子句分隔符：，、；,;
+        clause_delimiters = '，、；,;'
+        # 段落分隔符：换行
+        paragraph_delimiters = '\n'
+
+        if direction == 'backward':
+            # 向后查找（从start_pos向左）
+            # 优先查找句子边界
+            for i in range(start_pos - 1, -1, -1):
+                char = text[i]
+                if char in sentence_endings:
+                    # 找到句子边界，返回边界后的位置（i+1）
+                    return i + 1
+                elif char in clause_delimiters:
+                    # 找到子句边界，返回边界后的位置
+                    return i + 1
+                elif char in paragraph_delimiters:
+                    # 找到段落边界
+                    return i + 1
+
+            # 没找到边界，返回0（文本开头）
+            return 0
+        else:
+            # 向前查找（从start_pos向右）
+            # 优先查找句子边界
+            for i in range(start_pos, len(text)):
+                char = text[i]
+                if char in sentence_endings:
+                    # 找到句子边界，返回边界位置（i+1）
+                    return i + 1
+                elif char in clause_delimiters:
+                    # 找到子句边界，返回边界位置
+                    return i + 1
+                elif char in paragraph_delimiters:
+                    # 找到段落边界
+                    return i + 1
+
+            # 没找到边界，返回-1
+            return -1
+
+    def _calculate_semantic_overlap(self, chunk_content: str) -> str:
+        """计算语义完整的重叠内容
+
+        从chunk末尾向前查找，找到最近的语义边界，确保重叠内容完整
+        """
+        if len(chunk_content) <= self.chunk_overlap:
+            # 如果chunk长度小于等于重叠长度，整个chunk作为重叠
+            return chunk_content
+
+        # 从目标重叠位置开始查找边界
+        target_start = len(chunk_content) - self.chunk_overlap
+        boundary_pos = self._find_semantic_boundary(chunk_content, target_start, 'forward')
+
+        if boundary_pos == -1:
+            # 向前找不到，则从末尾向后找
+            boundary_pos = self._find_semantic_boundary(chunk_content, len(chunk_content), 'backward')
+
+        # 如果找到边界，返回边界之后的内容；否则返回默认重叠
+        if boundary_pos != -1:
+            return chunk_content[boundary_pos:]
+        else:
+            # 找不到语义边界，使用简单的字符截取
+            return chunk_content[-self.chunk_overlap:]
+
+    def _split_long_clause(self, clause: str, metadata: dict) -> List[Document]:
+        """分割超长子句，保持语义边界
+
+        用于处理超长句子分割后的子句，确保分割点在语义边界处
+        """
+        if len(clause) <= self.chunk_size:
+            return [self._create_chunk_doc(clause, metadata)]
+
+        chunks = []
+        current = ""
+
+        # 尝试按语义边界分割：先按子句分隔符分割
+        sub_parts = []
+        temp = ""
+        for char in clause:
+            temp += char
+            if char in '，、；,;。！？.!?':
+                sub_parts.append(temp)
+                temp = ""
+        if temp:
+            sub_parts.append(temp)
+
+        # 如果子句分割成功，按子句构建chunks
+        if len(sub_parts) > 1:
+            for part in sub_parts:
+                if len(current) + len(part) <= self.chunk_size:
+                    current += part
+                else:
+                    if current:
+                        chunks.append(self._create_chunk_doc(current, metadata))
+                    current = part
+            if current:
+                chunks.append(self._create_chunk_doc(current, metadata))
+        else:
+            # 无法按子句分割，按字符截断但尽量在单词边界
+            # 简单实现：按chunk_size截断
+            for i in range(0, len(clause), self.chunk_size):
+                chunk_content = clause[i:i + self.chunk_size]
+                if chunk_content.strip():
+                    chunks.append(self._create_chunk_doc(chunk_content, metadata))
+
+        return chunks
+
+    def _should_keep_overlap(self, segment: str, segment_type: str) -> bool:
+        """判断在特殊结构后是否应保持重叠
+
+        Args:
+            segment: 当前段内容
+            segment_type: 段类型 ('table', 'test_case', 'paragraph')
+
+        Returns:
+            True表示应保持重叠，False表示应重置重叠
+        """
+        if segment_type == 'table':
+            # 短小的表格保持重叠
+            return len(segment) < self.chunk_size * 0.3
+        elif segment_type == 'test_case':
+            # 测试用例关键结构通常较短，保持重叠
+            return len(segment) < self.chunk_size * 0.5
+        else:
+            # 普通段落总是保持重叠
+            return True
+
+    def _create_chunks(self, text: str, metadata: dict, prefix_overlap: str = "") -> List[Document]:
+        """创建chunks，处理重叠和过短问题
+
+        Args:
+            text: 要分割的文本
+            metadata: chunk元数据
+            prefix_overlap: 上一个块的重叠内容，将添加到当前块开头
+        """
         if not text.strip():
             return []
 
         # 检查是否需要分割
         if len(text) <= self.chunk_size:
-            # 检查是否过短，过短则不单独创建
             if len(text) < self.min_chunk_length:
                 return []
+            # 如果有前缀重叠，尝试合并
+            if prefix_overlap and not text.startswith(prefix_overlap):
+                combined = prefix_overlap + text
+                if len(combined) <= self.chunk_size:
+                    return [self._create_chunk_doc(combined, metadata)]
             return [self._create_chunk_doc(text, metadata)]
 
         # 按句子分割
+        print(f"[DEBUG _create_chunks] 文本长度={len(text)}, chunk_size={self.chunk_size}, chunk_overlap={self.chunk_overlap}")
         sentences = self._split_into_sentences(text)
+        print(f"[DEBUG _create_chunks] 分割出 {len(sentences)} 个句子")
 
         chunks = []
-        current = ""
+        current_chunk = prefix_overlap  # 初始化为前缀重叠
+        overlap = ""  # 上一个chunk末尾的重叠内容（用于下一个chunk）
 
         for sent in sentences:
-            if len(current) + len(sent) <= self.chunk_size:
-                current += sent
-            else:
-                if current:
-                    chunks.append(self._create_chunk_doc(current, metadata))
-                # 如果单个句子就超出限制，直接截断
-                if len(sent) > self.chunk_size:
-                    chunks.append(self._create_chunk_doc(sent[:self.chunk_size], metadata))
-                    sent = sent[self.chunk_size:]
-                    # 继续处理剩余部分
-                    while len(sent) > self.chunk_size:
-                        chunks.append(self._create_chunk_doc(sent[:self.chunk_size], metadata))
-                        sent = sent[self.chunk_size:]
-                    current = sent if len(sent) >= self.min_chunk_length else ""
-                else:
-                    current = sent if len(sent) >= self.min_chunk_length else ""
+            # 处理超长句子：按子句分割
+            if len(sent) > self.chunk_size:
+                sub_clauses = self._split_into_sub_clauses(sent)
+                for clause in sub_clauses:
+                    # 如果有重叠且子句不以重叠开头，则添加重叠
+                    if overlap and not clause.startswith(overlap):
+                        clause = overlap + clause
 
-        if current:
-            chunks.append(self._create_chunk_doc(current, metadata))
+                    # 检查子句是否超长
+                    if len(clause) > self.chunk_size:
+                        # 保存当前chunk
+                        if current_chunk.strip():
+                            print(f"[DEBUG _create_chunks] 保存当前chunk (超长句子分支1), 长度={len(current_chunk)}")
+                            chunks.append(self._create_chunk_doc(current_chunk, metadata))
+                            overlap = self._calculate_semantic_overlap(current_chunk)
+
+                        # 超长子句按语义边界分割
+                        print(f"[DEBUG _create_chunks] 分割超长子句, 长度={len(clause)}")
+                        sub_chunks = self._split_long_clause(clause, metadata)
+                        chunks.extend(sub_chunks)
+                        if sub_chunks:
+                            # 取最后一个子句的重叠作为后续重叠
+                            last_sub_chunk = sub_chunks[-1].page_content
+                            overlap = self._calculate_semantic_overlap(last_sub_chunk)
+                        current_chunk = ""
+                    elif len(current_chunk) + len(clause) <= self.chunk_size:
+                        # 可以加入当前chunk
+                        current_chunk += clause
+                    else:
+                        # 当前chunk满了，保存并创建新chunk
+                        if current_chunk.strip():
+                            print(f"[DEBUG _create_chunks] 保存当前chunk (超长句子分支2), 长度={len(current_chunk)}")
+                            chunks.append(self._create_chunk_doc(current_chunk, metadata))
+                            overlap = self._calculate_semantic_overlap(current_chunk)
+
+                        # 新chunk从当前子句开始（应用重叠）
+                        current_chunk = overlap + clause if overlap and not clause.startswith(overlap) else clause
+                continue
+
+            # 正常句子：尝试加入当前chunk
+            test_chunk = current_chunk + sent
+            if len(test_chunk) <= self.chunk_size:
+                current_chunk = test_chunk
+            else:
+                # 当前chunk满了，保存
+                if current_chunk.strip():
+                    print(f"[DEBUG _create_chunks] 保存当前chunk (正常句子分支), 长度={len(current_chunk)}")
+                    chunks.append(self._create_chunk_doc(current_chunk, metadata))
+                    overlap = self._calculate_semantic_overlap(current_chunk)
+
+                # 新chunk从当前句子开始（应用重叠）
+                current_chunk = overlap + sent if overlap and not sent.startswith(overlap) else sent
+
+        # 处理最后一个chunk
+        if current_chunk.strip() and len(current_chunk) >= self.min_chunk_length:
+            chunks.append(self._create_chunk_doc(current_chunk, metadata))
 
         return chunks
 
@@ -454,7 +704,7 @@ class SemanticTextSplitter:
 class TextSplitter:
     """兼容旧接口的分块器"""
 
-    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 300):
+    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 50):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.semantic_splitter = SemanticTextSplitter(
