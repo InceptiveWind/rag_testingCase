@@ -190,24 +190,22 @@ class DocumentLoader:
 
                 content = '\n\n'.join(doc_contents)
 
-                # 收集所有表格的元数据
+                # 收集所有表格的表头元数据
                 tables_metadata = [
-                    {'header': p['table_header']}
+                    p['table_header']
                     for p in content_parts if p['type'] == 'table'
                 ]
 
-                doc = Document(
-                    page_content=content,
-                    metadata={
-                        'source': str(file_path),
-                        'type': 'docx',
-                        'table_count': table_count,
-                        'has_tables': table_count > 0,
-                        'tables_metadata': tables_metadata
-                    }
-                )
+                doc_metadata = {
+                    'source': str(file_path),
+                    'type': 'docx',
+                    'table_count': table_count,
+                    'has_tables': table_count > 0,
+                }
+                if tables_metadata:
+                    doc_metadata['tables_metadata'] = tables_metadata
                 print(f"成功加载: {file_path.name}, 包含 {table_count} 个表格")
-                # 添加版本信息
+                doc = Document(page_content=content, metadata=doc_metadata)
                 return self._add_version_metadata([doc], file_path)
             else:
                 print(f"Word文件内容为空: {file_path.name}")
@@ -440,23 +438,20 @@ class DocumentLoader:
                 tables_metadata = []
                 for part in content_parts:
                     doc_contents.append(part['content'])
-                    tables_metadata.append({
-                        'header': part['table_header'],
-                        'sheet_name': part.get('sheet_name', '')
-                    })
+                    tables_metadata.append(f"{part.get('sheet_name', '')}: {part['table_header']}")
 
                 content = '\n\n'.join(doc_contents)
 
-                doc = Document(
-                    page_content=content,
-                    metadata={
-                        'source': str(file_path),
-                        'type': 'excel',
-                        'table_count': table_count,
-                        'has_tables': table_count > 0,
-                        'tables_metadata': tables_metadata
-                    }
-                )
+                doc_metadata = {
+                    'source': str(file_path),
+                    'type': 'excel',
+                    'table_count': table_count,
+                    'has_tables': table_count > 0,
+                }
+                if tables_metadata:
+                    doc_metadata['tables_metadata'] = tables_metadata
+
+                doc = Document(page_content=content, metadata=doc_metadata)
                 print(f"成功加载: {file_path.name}, 包含 {table_count} 个表格")
                 # 添加版本信息
                 return self._add_version_metadata([doc], file_path)
