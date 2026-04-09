@@ -108,7 +108,7 @@ class DocumentPreprocessor:
             enable_llm: 是否启用LLM标签生成
             llm_provider: LLM提供商实例
             enable_image_processing: 是否启用图片处理
-            vision_provider: 视觉模型提供商: "ollama" | "volcano"（可选，默认从config读取）
+            vision_provider: 视觉模型提供商: "ollama" | "minimax"（可选，默认从config读取）
         """
         self.enable_llm = enable_llm
         self.llm_provider = llm_provider

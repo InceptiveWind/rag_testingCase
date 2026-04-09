@@ -21,7 +21,7 @@ from config import (
     EMBEDDING_MODEL,
     COLLECTION_NAME,
     LLM_PROVIDER,
-    VOLCANO_MODEL,
+    MINIMAX_MODEL,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     TOP_K,
@@ -58,7 +58,7 @@ def index():
     return render_template('index.html', config={
         'knowledge_base_dir': str(KNOWLEDGE_BASE_DIR),
         'cases_output_dir': str(CASES_OUTPUT_DIR),
-        'llm_model': VOLCANO_MODEL
+        'llm_model': MINIMAX_MODEL
     })
 
 
@@ -296,7 +296,7 @@ def status():
                 'vector_doc_count': vector_doc_count,
                 'build_status': build_status,
                 'llm_provider': LLM_PROVIDER,
-                'llm_model': VOLCANO_MODEL,
+                'llm_model': MINIMAX_MODEL,
                 'embedding_model': EMBEDDING_MODEL
             }
         })

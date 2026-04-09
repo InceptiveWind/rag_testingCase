@@ -28,6 +28,68 @@ class TestCaseGenerator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _build_cases_prompt(
+            self,
+            *,
+            query: str,
+            context: str,
+            batch_size: int,
+            examples: str = "",
+            existing_names: List[str] = None
+    ) -> str:
+        """构建更结构化、更短、更稳定的用例生成提示词。"""
+        existing_names = existing_names or []
+
+        examples_section = f"\n[参考示例]\n{examples}\n" if examples else ""
+
+        existing_section = ""
+        if existing_names:
+            # 只给少量已存在名称，避免prompt膨胀
+            names_str = "、".join([f'"{n}"' for n in existing_names[:20]])
+            existing_section = f"\n[已存在用例名(勿重复)]\n{names_str}\n"
+
+        # 结构化：任务 -> 约束 -> Schema -> 示例 -> 输入
+        # 重点：减少长篇“角色设定”，明确“只输出JSON数组”。
+        return (
+            "[任务]\n"
+            f"基于需求与知识库内容，生成 {batch_size} 个测试用例（覆盖：主流程/边界/异常/关联）。\n\n"
+            "[输出要求]\n"
+            "- 只输出：一个标准JSON数组。不要markdown、不要解释、不要额外文本。\n"
+            "- JSON必须可被 json.loads() 直接解析；必须以 `[` 开头、以 `]` 结尾。\n"
+            "- 不要生成与“已存在用例名”重复的 name。\n"
+            "- 文本字段中不要出现真实换行符；如需换行，用字面 `\\n`。\n\n"
+            "[JSON Schema]\n"
+            "[\n"
+            "  {\n"
+            '    "name": "用例名称(仅step_id=1填写)",\n'
+            '    "step_id": 1,\n'
+            '    "step": "1. ...\\\\n2. ...",\n'
+            '    "precondition": "前置条件",\n'
+            '    "priority": "高|中|低",\n'
+            '    "expected": "预期结果"\n'
+            "  },\n"
+            "  {\n"
+            '    "name": "",\n'
+            '    "step_id": 2,\n'
+            '    "step": "1. ...\\\\n2. ...",\n'
+            '    "precondition": "",\n'
+            '    "priority": "",\n'
+            '    "expected": "预期结果"\n'
+            "  }\n"
+            "]\n\n"
+            "[字段规则]\n"
+            "- 每个元素必须包含：name, step_id, step, precondition, priority, expected 六个键。\n"
+            "- 同一用例允许多行：step_id=1 行填写 name/priority；step_id>1 行 name/priority 置空字符串。\n"
+            "- step_id 必须是数字(1,2,3...)。\n\n"
+            f"{examples_section}"
+            f"{existing_section}"
+            "[输入]\n"
+            f"需求：{query}\n\n"
+            "知识库内容：\n"
+            f"{context}\n\n"
+            "[现在开始输出JSON数组]\n"
+        )
+
     def generate(
             self,
             query: str,
@@ -37,7 +99,7 @@ class TestCaseGenerator:
             max_retries: int = 2,
             examples: str = "",
             use_streaming: bool = True
-    ) -> str:
+    ) -> List[Dict]:
         """
         生成测试用例（支持大批量）
 
@@ -56,11 +118,16 @@ class TestCaseGenerator:
         print(f"\n开始生成测试用例（目标: {num_cases} 个，每批 {batch_size} 个）...")
 
         all_test_cases = []
-        existing_names = []  # 记录已生成的用例名，避免重复
+        existing_names_set = set()  # 记录已生成的用例名，避免重复（O(1) membership）
 
         # 持续生成直到达到目标数量
         batch_num = 0
+        # 防止LLM持续失败导致死循环：按“目标批次数 * 每批重试”上限兜底
+        max_total_batches = max(1, (num_cases + batch_size - 1) // batch_size) * max(1, max_retries) * 3
         while len(all_test_cases) < num_cases:
+            if batch_num >= max_total_batches:
+                print(f"  已达到最大批次数上限({max_total_batches})，提前停止生成。")
+                break
             current_batch_size = min(batch_size, num_cases - len(all_test_cases))
             start_idx = len(all_test_cases) + 1
 
@@ -87,7 +154,7 @@ class TestCaseGenerator:
                     start_idx=current_start_idx,
                     batch_size=request_size,
                     examples=examples,
-                    existing_names=existing_names
+                    existing_names=list(existing_names_set)
                 )
 
                 if temp_cases:
@@ -95,9 +162,9 @@ class TestCaseGenerator:
                     new_cases = []
                     for tc in temp_cases:
                         name = tc.get('name', '').strip()
-                        if name and name not in existing_names:
+                        if name and name not in existing_names_set:
                             new_cases.append(tc)
-                            existing_names.append(name)
+                            existing_names_set.add(name)
                         elif name:
                             print(f"    过滤掉重复用例: {name}")
 
@@ -119,7 +186,7 @@ class TestCaseGenerator:
             batch_num += 1
 
         if not all_test_cases:
-            return "错误：无法生成测试用例，请检查LLM服务是否正常运行"
+            return []
 
         # 去除重复的用例（根据name去重，保留第一个）
         unique_cases = []
@@ -156,59 +223,12 @@ class TestCaseGenerator:
             for i, doc in enumerate(context_docs[:5])  # 最多5个文档
         ])
 
-        # 构建示例部分
-        examples_section = ""
-        if examples:
-            examples_section = "\n参考示例:\n" + examples + "\n"
-
-        # 构建已存在用例的提示
-        existing_section = ""
-        if existing_names:
-            names_str = "、".join([f'"{n}"' for n in existing_names[:20]])  # 最多显示20个
-            existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
-
-        prompt = """【角色设定】你是资深测试工程师，精通等价类划分、边界值分析、错误推测法、场景法，能够全面覆盖所有测试场景，输出符合规范的测试用例。
-必须覆盖以下4类场景，不得遗漏：
-   - 正常主流程：覆盖所有需求明确的正常操作路径
-   - 边界值场景：覆盖所有参数的上下临界值、枚举值、空值
-   - 异常流场景：覆盖需求明确的异常场景，以及通用测试异常（参数非法、权限不足、重复提交、网络中断、依赖服务失败等）
-   - 关联场景：覆盖和当前功能关联的其他功能的交互场景
-   基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
-
-需求: {query}
-{examples_section}
-知识库内容:
-{context}
-{existing_section}
-
-重要格式要求（必须严格遵守）：
-1. 输出必须是标准JSON数组格式
-2. 每个元素是一个对象，必须包含以下6个键：name、step_id、step、precondition、priority、expected
-3. name键的值只填写用例名称，不要包含任何其他内容
-4. step_id键的值只填写数字（1,2,3...），表示步骤组编号
-5. step键的值填写该步骤组的多个小步骤，用数字序号表示，步骤之间用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
-6. precondition键的值只填写前置条件
-7. priority键的值只填写"高"或"中"或"低"
-8. expected键的值只填写预期结果
-9. 同一个用例可以有多个步骤组，step_id=1的行填写name和priority，step_id>1的行name和priority填空
-10. 不要在任何键的值中包含实际换行符（用\\n代替）
-11. 不要生成与已有用例名重复的测试用例
-12. 不要在返回中包含任何可导致json解析失败的符号
-
-【重要】JSON完整性要求（必须严格遵守，否则系统无法解析）：
-- 请务必在一次回复中返回完整的JSON数组
-- JSON数组必须以 [ 开头，以 ] 结尾
-- 每个用例对象的引号必须成对匹配
-- 确保返回内容是完整且可直接json.loads()解析的
-- 如果回复被截断，系统将无法正确解析
-
-请按以下精确JSON格式输出，只输出数组，不要有任何其他内容：
-[{{"name":"登录功能","step_id":1,"step":"1. 打开登录页面\\n2. 输入用户名\\n3. 输入密码","precondition":"系统正常运行","priority":"高","expected":"登录成功"}},{{"name":"","step_id":2,"step":"1. 点击登录按钮\\n2. 检查跳转","precondition":"","priority":"","expected":"跳转首页"}}]""".format(
-            batch_size=batch_size,
+        prompt = self._build_cases_prompt(
             query=query,
-            examples_section=examples_section,
-            existing_section=existing_section,
-            context=context
+            context=context,
+            batch_size=batch_size,
+            examples=examples,
+            existing_names=existing_names
         )
 
         # 重试机制：最多重试次数
@@ -349,59 +369,12 @@ class TestCaseGenerator:
             for i, doc in enumerate(context_docs[:5])
         ])
 
-        # 构建示例部分
-        examples_section = ""
-        if examples:
-            examples_section = f"\n参考示例:\n{examples}\n"
-
-        # 构建已存在用例的提示
-        existing_section = ""
-        if existing_names:
-            names_str = "、".join([f'"{n}"' for n in existing_names[:20]])
-            existing_section = f"\n注意：以下用例名已经存在，请勿生成重复的：{names_str}\n"
-
-        # 统一 prompt 构建（与普通模式 _generate_batch 保持一致）
-        prompt = """【角色设定】你是资深测试工程师，精通等价类划分、边界值分析、错误推测法、场景法，能够全面覆盖所有测试场景，输出符合规范的测试用例。
-必须覆盖以下4类场景，不得遗漏：
-   - 正常主流程：覆盖所有需求明确的正常操作路径
-   - 边界值场景：覆盖所有参数的上下临界值、枚举值、空值
-   - 异常流场景：覆盖需求明确的异常场景，以及通用测试异常（参数非法、权限不足、重复提交、网络中断、依赖服务失败等）
-   - 关联场景：覆盖和当前功能关联的其他功能的交互场景
-   基于以下需求和知识库内容，生成 {batch_size} 个测试用例。
-
-需求: {query}
-{examples_section}
-知识库内容:
-{context}
-{existing_section}
-
-重要格式要求（必须严格遵守）：
-1. 输出必须是标准JSON数组格式
-2. 每个元素是一个对象，必须包含以下6个键：name、step_id、step、precondition、priority、expected
-3. name键的值只填写用例名称，不要包含任何其他内容
-4. step_id键的值只填写数字（1,2,3...），表示步骤组编号
-5. step键的值填写该步骤组的多个小步骤，用数字序号表示，步骤之间用"\\n"分隔（如："1. 打开登录页面\\n2. 输入用户名"）
-6. precondition键的值只填写前置条件
-7. priority键的值只填写"高"或"中"或"低"
-8. 同一个用例可以有多个步骤组，step_id=1的行填写name和priority，step_id>1的行name和priority填空
-9. 不要在任何键的值中包含实际换行符（用\\n代替）
-10. 不要生成与已有用例名重复的测试用例
-11. 不要在返回中包含任何可导致json解析失败的符号
-
-【重要】JSON完整性要求（必须严格遵守，否则系统无法解析）：
-- 请务必在一次回复中返回完整的JSON数组
-- JSON数组必须以 [ 开头，以 ] 结尾
-- 每个用例对象的引号必须成对匹配
-- 确保返回内容是完整且可直接json.loads()解析的
-- 如果回复被截断，系统将无法正确解析
-
-请按以下精确JSON格式输出，只输出数组，不要有任何其他内容：
-[{{"name":"登录功能","step_id":1,"step":"1. 打开登录页面\\n2. 输入用户名\\n3. 输入密码","precondition":"系统正常运行","priority":"高","expected":"登录成功"}},{{"name":"","step_id":2,"step":"1. 点击登录按钮\\n2. 检查跳转","precondition":"","priority":"","expected":"跳转首页"}}]""".format(
-            batch_size=batch_size,
+        prompt = self._build_cases_prompt(
             query=query,
-            examples_section=examples_section,
-            existing_section=existing_section,
-            context=context
+            context=context,
+            batch_size=batch_size,
+            examples=examples,
+            existing_names=existing_names
         )
 
         # 打印发送给 LLM 的原始请求
@@ -688,7 +661,8 @@ class TestCaseGenerator:
             elif char == '"':
                 result.append(char)
                 in_string = not in_string
-            elif not in_string:
+            else:
+                # 不能丢弃字符串中的内容；这里只做“是否在字符串内”的跟踪
                 result.append(char)
             i += 1
 
@@ -727,56 +701,47 @@ class TestCaseGenerator:
         return case
 
     def _merge_multi_step_cases(self, cases: List[Dict]) -> List[Dict]:
-        """合并同一个用例的多个step_id行"""
-        # 按name分组，收集所有step_id>1的步骤
-        name_to_steps = {}  # name -> [(step_id, step, expected), ...]
-        name_to_main = {}    # name -> step_id=1的完整用例
+        """将 step_id>1 且 name 为空的行归并到最近一个非空 name 的用例下。
+
+        说明：
+        - prompt 明确要求 step_id>1 行的 name 为空，因此不能按 name 分组；
+        - 这里用“最近一次出现的 step_id=1 且 name 非空”的用例作为归属。
+        - 输出仍保持 step_id>1 行 name 为空（便于导出模板写入规则）。
+        """
+        if not cases:
+            return cases
+
+        merged = []
+        current_name = ""
+        current_main_seen = False
 
         for tc in cases:
-            name = tc.get('name', '')
+            name = (tc.get('name') or '').strip()
             step_id = tc.get('step_id', 1)
-            step = tc.get('step', '')
-            expected = tc.get('expected', '')
 
-            if not name:  # name为空，跳过
+            if step_id == 1 and name:
+                current_name = name
+                current_main_seen = True
+                merged.append(tc)
                 continue
 
-            if step_id == 1:
-                name_to_main[name] = tc.copy()
-                name_to_steps[name] = []
-            else:
-                if name in name_to_steps:
-                    name_to_steps[name].append((step_id, step, expected))
+            if not name and step_id and step_id > 1 and current_main_seen and current_name:
+                # 归并到当前用例：保持name为空，但补齐缺失字段，避免Excel写入时报KeyError/None混乱
+                merged.append({
+                    'name': '',
+                    'step_id': step_id,
+                    'step': tc.get('step', ''),
+                    'precondition': tc.get('precondition', ''),
+                    'priority': tc.get('priority', ''),
+                    'expected': tc.get('expected', '')
+                })
+                continue
 
-        # 合并多步骤
-        merged_cases = []
-        for name, main_case in name_to_main.items():
-            # 添加主用例（step_id=1）
-            merged_cases.append(main_case)
-            # 添加后续步骤
-            if name in name_to_steps and name_to_steps[name]:
-                # 按step_id排序
-                name_to_steps[name].sort(key=lambda x: x[0])
-                for step_id, step, expected in name_to_steps[name]:
-                    merged_cases.append({
-                        'name': '',  # 后续步骤name为空
-                        'step_id': step_id,
-                        'step': step,
-                        'precondition': '',
-                        'priority': '',
-                        'expected': expected
-                    })
+            # 兜底：无法归属的行原样保留（例如第一行就是step_id>1，或LLM没按约定输出）
+            merged.append(tc)
 
-        # 添加没有对应step_id=1的孤立行
-        for tc in cases:
-            name = tc.get('name', '')
-            step_id = tc.get('step_id', 1)
-            if not name and step_id and step_id > 1:
-                # 检查是否已添加
-                merged_cases.append(tc)
-
-        print(f"  合并多步骤: {len(cases)} -> {len(merged_cases)} 行")
-        return merged_cases
+        print(f"  合并多步骤(按最近name归属): {len(cases)} -> {len(merged)} 行")
+        return merged
 
     def _format_cases(self, cases: List[Dict]) -> str:
         """格式化测试用例为Markdown"""
@@ -793,12 +758,14 @@ class TestCaseGenerator:
                 md_content += f"**前置条件**: {precond}\n\n"
 
             md_content += "**测试步骤**:\n"
-            steps = tc.get('steps', [])
-            if isinstance(steps, list):
-                for j, step in enumerate(steps, 1):
-                    md_content += f"{j}. {step}\n"
+            step_text = tc.get('step', '')
+            if isinstance(step_text, str) and step_text:
+                for line in step_text.replace('\\n', '\n').split('\n'):
+                    line = line.strip()
+                    if line:
+                        md_content += f"{line}\n"
             else:
-                md_content += f"1. {steps}\n"
+                md_content += "1. （无）\n"
 
             md_content += f"\n**预期结果**: {tc.get('expected', '')}\n\n"
 
@@ -882,23 +849,15 @@ class TestCaseGenerator:
         # 找到数据开始行（跳过表头）
         start_row = 2
 
-        # 计算每个用例的编号（按name计数，每个唯一的name算一个用例）
-        # 同一个name的多个step_id行共享同一个编号
+        # 计算用例编号：仅在 step_id=1 且 name 非空时递增
         case_number = 0
-        seen_names = set()  # 用于记录已经编号过的name
         for tc in cases:
-            name = tc.get('name', '')
+            name = (tc.get('name') or '').strip()
             step_id = tc.get('step_id')
-
-            # name为空时不跳过（step_id>1的行需要正常写入，只是name留空）
-
-            # 如果这个name还没编号过，则编号
-            if name not in seen_names:
+            if step_id == 1 and name:
                 case_number += 1
-                seen_names.add(name)
                 tc['_case_number'] = case_number
             else:
-                # 已编号的name，不再编号
                 tc['_case_number'] = None
 
         # 写入测试用例数据

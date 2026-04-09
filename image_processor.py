@@ -182,12 +182,12 @@ class ImageDescriber:
         Args:
             llm_provider: LLM提供商
             vision_model: 视觉模型名称（可选，默认从config读取）
-            vision_provider: 视觉模型提供商: "ollama" | "volcano"（可选，默认从config读取）
+            vision_provider: 视觉模型提供商: "ollama" | "minimax"（可选，默认从config读取）
         """
         self.llm_provider = llm_provider
 
         # 从配置读取默认值
-        from config import OLLAMA_VISION_MODEL, VOLCANO_VISION_MODEL, IMAGE_VISION_PROVIDER
+        from config import OLLAMA_VISION_MODEL, MINIMAX_VISION_MODEL, IMAGE_VISION_PROVIDER
 
         # 视觉模型提供商
         self.vision_provider = vision_provider or IMAGE_VISION_PROVIDER
@@ -197,14 +197,17 @@ class ImageDescriber:
             self.vision_model = vision_model
         elif self.vision_provider == "ollama":
             self.vision_model = OLLAMA_VISION_MODEL
-        elif self.vision_provider == "volcano":
-            self.vision_model = VOLCANO_VISION_MODEL
+        elif self.vision_provider == "minimax":
+            self.vision_model = MINIMAX_VISION_MODEL
         else:
             self.vision_model = OLLAMA_VISION_MODEL
 
+        # 图片压缩配置
+        self.max_image_size_bytes = 10 * 1024 * 1024  # 10MB
+
         # 根据提供商初始化不同的客户端
         self._openai_client = None
-        self._volcano_client = None
+        self._minimax_client = None
 
         if self.vision_provider == "ollama":
             # Ollama 使用 OpenAI 兼容接口
@@ -217,19 +220,98 @@ class ImageDescriber:
                 )
             except Exception:
                 pass
-        elif self.vision_provider == "volcano":
-            # 火山引擎使用 OpenAI 兼容接口
+        elif self.vision_provider == "minimax":
+            # MiniMax使用 OpenAI 兼容接口
             try:
                 from openai import OpenAI
-                from config import VOLCANO_API_KEY, VOLCANO_BASE_URL
-                # 火山引擎方舟API的chat completions路径
-                volcano_base_url = VOLCANO_BASE_URL.rstrip('/')
-                self._volcano_client = OpenAI(
-                    api_key=VOLCANO_API_KEY,
-                    base_url=f"{volcano_base_url}"
+                from config import MINIMAX_API_KEY, MINIMAX_BASE_URL
+                # MiniMax API路径
+                minimax_base_url = MINIMAX_BASE_URL.rstrip('/')
+                self._minimax_client = OpenAI(
+                    api_key=MINIMAX_API_KEY,
+                    base_url=f"{minimax_base_url}"
                 )
             except Exception:
                 pass
+
+    def _compress_image(self, image: Image.Image, max_size_bytes: int = None) -> Image.Image:
+        """
+        压缩图片使其小于指定大小
+
+        Args:
+            image: PIL Image 对象
+            max_size_bytes: 最大文件大小（字节），默认 10MB
+
+        Returns:
+            压缩后的 PIL Image 对象
+        """
+        if max_size_bytes is None:
+            max_size_bytes = self.max_image_size_bytes
+
+        from io import BytesIO
+
+        # 先检查当前图片大小
+        buffer = BytesIO()
+        image.save(buffer, format='PNG')
+        current_size = buffer.tell()
+
+        if current_size <= max_size_bytes:
+            return image
+
+        # 需要压缩，逐步降低质量直到满足大小要求
+        # 首先尝试缩小图片尺寸
+        width, height = image.size
+        compress_image = image
+
+        # 逐步缩小尺寸（每次缩小10%）
+        while width > 200 and current_size > max_size_bytes:
+            new_width = int(width * 0.9)
+            new_height = int(height * 0.9)
+            compress_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            buffer = BytesIO()
+            compress_image.save(buffer, format='PNG')
+            current_size = buffer.tell()
+
+            if current_size <= max_size_bytes:
+                return compress_image
+
+            width, height = new_width, new_height
+
+        # 转为JPEG尝试降低质量
+        if compress_image.mode not in ('RGB', 'L'):
+            compress_image = compress_image.convert('RGB')
+
+        quality = 95
+        while quality >= 50 and current_size > max_size_bytes:
+            buffer = BytesIO()
+            compress_image.save(buffer, format='JPEG', quality=quality)
+            current_size = buffer.tell()
+            quality -= 5
+
+        if current_size <= max_size_bytes:
+            return compress_image
+
+        # 最后手段：继续降低质量和尺寸
+        while current_size > max_size_bytes and width > 100:
+            new_width = int(width * 0.8)
+            new_height = int(height * 0.8)
+            compress_image = compress_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            quality = 80
+            while quality >= 30 and current_size > max_size_bytes:
+                buffer = BytesIO()
+                compress_image.save(buffer, format='JPEG', quality=quality)
+                current_size = buffer.tell()
+                quality -= 10
+
+            width, height = new_width, new_height
+
+        # 确保返回的是RGB模式
+        if compress_image.mode not in ('RGB', 'L'):
+            compress_image = compress_image.convert('RGB')
+
+        return compress_image
 
     def describe_image(self, image: Image.Image, prompt: str = None) -> str:
         """
@@ -242,10 +324,13 @@ class ImageDescriber:
         Returns:
             图片描述文本
         """
-        if not self.llm_provider and not self._openai_client and not self._volcano_client:
+        if not self.llm_provider and not self._openai_client and not self._minimax_client:
             return self._simple_describe(image)
 
         try:
+            # 压缩图片以满足大小限制
+            image = self._compress_image(image)
+
             # 将图片转换为 base64
             import base64
             from io import BytesIO
@@ -258,10 +343,10 @@ class ImageDescriber:
             user_prompt = prompt or self.DEFAULT_PROMPT
 
             # 根据视觉模型提供商选择调用方式
-            if self.vision_provider == "volcano" and self._volcano_client:
-                # 火山引擎视觉模型
+            if self.vision_provider == "minimax" and self._minimax_client:
+                # MiniMax视觉模型
                 try:
-                    response = self._volcano_client.chat.completions.create(
+                    response = self._minimax_client.chat.completions.create(
                         model=self.vision_model,
                         messages=[
                             {
@@ -278,7 +363,7 @@ class ImageDescriber:
                     )
                     return response.choices[0].message.content
                 except Exception as e:
-                    print(f"  火山引擎视觉模型调用失败: {e}")
+                    print(f"  MiniMax视觉模型调用失败: {e}")
 
             elif self.vision_provider == "ollama" and self._openai_client:
                 # Ollama 视觉模型（OpenAI 兼容接口）
@@ -391,7 +476,7 @@ class ImagePreprocessor:
         Args:
             llm_provider: LLM提供商
             enable_vision: 是否启用视觉描述（需要视觉模型）
-            vision_provider: 视觉模型提供商: "ollama" | "volcano"（可选，默认从config读取）
+            vision_provider: 视觉模型提供商: "ollama" | "minimax"（可选，默认从config读取）
         """
         self.llm_provider = llm_provider
         self.enable_vision = enable_vision

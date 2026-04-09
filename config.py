@@ -23,20 +23,19 @@ COLLECTION_NAME = "test_knowledge_base"
 EMBEDDING_MODEL = "D:/models/bge-small-zh-v1.5"
 
 # LLM提供商配置
-LLM_PROVIDER = "volcano"  # LLM提供商: "ollama" | "volcano"
+LLM_PROVIDER = "minimax"  # LLM提供商: "ollama" | "minimax"
 
 # Ollama配置（当 LLM_PROVIDER = "ollama" 时生效）
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen3.5:9b-q8_0"  # 或其他你下载的模型
 
-# 火山引擎配置（当 LLM_PROVIDER = "volcano" 时生效）
-# 火山引擎API Key（从火山引擎控制台获取，使用环境变量）
-VOLCANO_API_KEY = os.environ.get("VOLCANO_API_KEY", "")
-# 火山引擎API地址
-VOLCANO_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
-# 火山引擎模型
-#VOLCANO_MODEL = "doubao-seed-2-0-code"
-VOLCANO_MODEL = "doubao-seed-2-0-pro"
+# MiniMax配置（当 LLM_PROVIDER = "minimax" 时生效）
+# MiniMax API Key（从MiniMax控制台获取，使用环境变量）
+MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
+# MiniMax API地址
+MINIMAX_BASE_URL = "https://api.minimax.chat/v1"
+# MiniMax模型
+MINIMAX_MODEL = "MiniMax-M2.7"
 
 # 测试用例生成配置
 CHUNK_SIZE = 1500  # 文档分块大小
@@ -58,12 +57,11 @@ ENABLE_LLM_TAG = False  # 基于规则的标签（快速）
 
 # 图片处理配置
 ENABLE_IMAGE_PROCESSING = True  # 是否启用图片处理（生成图片描述）
-IMAGE_VISION_PROVIDER = "volcano"  # 视觉模型提供商: "ollama" | "volcano"
+IMAGE_VISION_PROVIDER = "minimax"  # 视觉模型提供商: "ollama" | "minimax"
 # Ollama视觉模型配置（当 IMAGE_VISION_PROVIDER = "ollama" 时生效）
 OLLAMA_VISION_MODEL = "qwen3-vl:8b"  # Ollama视觉模型
-# 火山引擎视觉模型配置（当 IMAGE_VISION_PROVIDER = "volcano" 时生效）
-#doubao-pro-4k视觉版本
-VOLCANO_VISION_MODEL = "doubao-seed-2-0-pro"
+# MiniMax视觉模型配置（当 IMAGE_VISION_PROVIDER = "minimax" 时生效）
+MINIMAX_VISION_MODEL = "MiniMax-Text-01"
 
 # 测试用例生成配置
 EXAMPLES = """
