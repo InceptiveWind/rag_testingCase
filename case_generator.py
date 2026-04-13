@@ -160,13 +160,26 @@ class TestCaseGenerator:
                 if temp_cases:
                     # 过滤掉与已有用例重复的（根据name判断）
                     new_cases = []
+                    # 子步骤必须能归属到最近主步骤；如果本批前面没有主步骤，
+                    # 允许归属到历史已保留主步骤（existing_names_set 非空）。
+                    has_main_anchor = len(existing_names_set) > 0
                     for tc in temp_cases:
                         name = tc.get('name', '').strip()
+                        step_id = tc.get('step_id')
+                        step_text = (tc.get('step') or '').strip()
+
+                        # 主步骤（step_id=1）按 name 去重
                         if name and name not in existing_names_set:
                             new_cases.append(tc)
                             existing_names_set.add(name)
+                            has_main_anchor = True
                         elif name:
                             print(f"    过滤掉重复用例: {name}")
+                        # 子步骤（step_id>1 且 name 为空）也要保留，否则会丢失 step_id=2/3...
+                        elif step_id and step_id > 1 and step_text and has_main_anchor:
+                            new_cases.append(tc)
+                        elif step_id and step_id > 1 and step_text:
+                            print(f"    过滤掉孤立子步骤: step_id={step_id}, step='{step_text[:30]}'")
 
                     batch_cases.extend(new_cases)
                     print(
@@ -193,11 +206,19 @@ class TestCaseGenerator:
         seen_names = set()
         for tc in all_test_cases:
             name = tc.get('name', '').strip()
+            step_id = tc.get('step_id')
+            step_text = (tc.get('step') or '').strip()
             if name and name not in seen_names:
                 seen_names.add(name)
                 unique_cases.append(tc)
             elif name:
                 print(f"  去除重复用例: {name}")
+            # 保留多步骤子行（name 为空是预期行为）
+            elif step_id and step_id > 1 and step_text:
+                unique_cases.append(tc)
+
+        # 二次防护：去除无法归属到最近主步骤(step_id=1且name非空)的子步骤行
+        unique_cases = self._drop_orphan_sub_steps(unique_cases)
 
         print(f"\n总计生成: {len(all_test_cases)} 个测试用例，去重后: {len(unique_cases)} 个")
 
@@ -699,6 +720,39 @@ class TestCaseGenerator:
             if expected_match:
                 case['expected'] = expected_match.group(1).strip()
         return case
+
+    def _drop_orphan_sub_steps(self, cases: List[Dict]) -> List[Dict]:
+        """移除无法归属到最近主步骤的子步骤行。"""
+        if not cases:
+            return cases
+
+        filtered = []
+        has_main_anchor = False
+        orphan_count = 0
+
+        for tc in cases:
+            name = (tc.get('name') or '').strip()
+            step_id = tc.get('step_id')
+            step_text = (tc.get('step') or '').strip()
+
+            if step_id == 1 and name:
+                filtered.append(tc)
+                has_main_anchor = True
+                continue
+
+            if step_id and step_id > 1 and step_text:
+                if has_main_anchor:
+                    filtered.append(tc)
+                else:
+                    orphan_count += 1
+                continue
+
+            # 其他场景保持原样，避免误删异常数据，交给后续流程处理
+            filtered.append(tc)
+
+        if orphan_count:
+            print(f"  过滤掉 {orphan_count} 条无法归属主步骤的子步骤")
+        return filtered
 
     def _merge_multi_step_cases(self, cases: List[Dict]) -> List[Dict]:
         """将 step_id>1 且 name 为空的行归并到最近一个非空 name 的用例下。
