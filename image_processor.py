@@ -187,7 +187,7 @@ class ImageDescriber:
         self.llm_provider = llm_provider
 
         # 从配置读取默认值
-        from config import OLLAMA_VISION_MODEL, MINIMAX_VISION_MODEL, IMAGE_VISION_PROVIDER
+        from config import OLLAMA_VISION_MODEL, MINIMAX_VISION_MODEL, ARK_VISION_MODEL, IMAGE_VISION_PROVIDER
 
         # 视觉模型提供商
         self.vision_provider = vision_provider or IMAGE_VISION_PROVIDER
@@ -199,6 +199,8 @@ class ImageDescriber:
             self.vision_model = OLLAMA_VISION_MODEL
         elif self.vision_provider == "minimax":
             self.vision_model = MINIMAX_VISION_MODEL
+        elif self.vision_provider == "volcano":
+            self.vision_model = ARK_VISION_MODEL
         else:
             self.vision_model = OLLAMA_VISION_MODEL
 
@@ -208,6 +210,7 @@ class ImageDescriber:
         # 根据提供商初始化不同的客户端
         self._openai_client = None
         self._minimax_client = None
+        self._volcano_client = None
 
         if self.vision_provider == "ollama":
             # Ollama 使用 OpenAI 兼容接口
@@ -230,6 +233,17 @@ class ImageDescriber:
                 self._minimax_client = OpenAI(
                     api_key=MINIMAX_API_KEY,
                     base_url=f"{minimax_base_url}"
+                )
+            except Exception:
+                pass
+        elif self.vision_provider == "volcano":
+            # 火山引擎使用 OpenAI 兼容接口
+            try:
+                from openai import OpenAI
+                from config import ARK_API_KEY, ARK_BASE_URL
+                self._volcano_client = OpenAI(
+                    api_key=ARK_API_KEY,
+                    base_url=ARK_BASE_URL
                 )
             except Exception:
                 pass
@@ -324,7 +338,7 @@ class ImageDescriber:
         Returns:
             图片描述文本
         """
-        if not self.llm_provider and not self._openai_client and not self._minimax_client:
+        if not self.llm_provider and not self._openai_client and not self._minimax_client and not self._volcano_client:
             return self._simple_describe(image)
 
         try:
@@ -364,6 +378,28 @@ class ImageDescriber:
                     return response.choices[0].message.content
                 except Exception as e:
                     print(f"  MiniMax视觉模型调用失败: {e}")
+
+            elif self.vision_provider == "volcano" and self._volcano_client:
+                # 火山引擎视觉模型
+                try:
+                    response = self._volcano_client.chat.completions.create(
+                        model=self.vision_model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": user_prompt},
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:image/png;base64,{img_base64}"}
+                                    }
+                                ]
+                            }
+                        ]
+                    )
+                    return response.choices[0].message.content
+                except Exception as e:
+                    print(f"  火山引擎视觉模型调用失败: {e}")
 
             elif self.vision_provider == "ollama" and self._openai_client:
                 # Ollama 视觉模型（OpenAI 兼容接口）

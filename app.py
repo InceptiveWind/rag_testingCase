@@ -22,6 +22,7 @@ from config import (
     COLLECTION_NAME,
     LLM_PROVIDER,
     MINIMAX_MODEL,
+    ARK_MODEL,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     TOP_K,
@@ -296,7 +297,7 @@ def status():
                 'vector_doc_count': vector_doc_count,
                 'build_status': build_status,
                 'llm_provider': LLM_PROVIDER,
-                'llm_model': MINIMAX_MODEL,
+                'llm_model': ARK_MODEL if LLM_PROVIDER == "volcano" else MINIMAX_MODEL,
                 'embedding_model': EMBEDDING_MODEL
             }
         })

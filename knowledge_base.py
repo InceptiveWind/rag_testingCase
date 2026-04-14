@@ -23,6 +23,9 @@ from config import (
     MINIMAX_API_KEY,
     MINIMAX_BASE_URL,
     MINIMAX_MODEL,
+    ARK_API_KEY,
+    ARK_BASE_URL,
+    ARK_MODEL,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     TOP_K,
@@ -58,6 +61,14 @@ def create_llm_provider(config: dict = None):
             model=config.get('minimax_model', MINIMAX_MODEL),
             api_key=config.get('minimax_api_key', MINIMAX_API_KEY),
             base_url=config.get('minimax_base_url', MINIMAX_BASE_URL),
+            max_tokens=config.get('max_tokens', MAX_TOKENS)
+        )
+    elif provider_type == "volcano":
+        from llm_provider_volcano import VolcanoProvider
+        return VolcanoProvider(
+            model=config.get('ark_model', ARK_MODEL),
+            api_key=config.get('ark_api_key', ARK_API_KEY),
+            base_url=config.get('ark_base_url', ARK_BASE_URL),
             max_tokens=config.get('max_tokens', MAX_TOKENS)
         )
     else:
@@ -256,6 +267,8 @@ class KnowledgeBase:
         provider = self.config.get('llm_provider', LLM_PROVIDER)
         if provider == "minimax":
             print(f"检查 MiniMax ({MINIMAX_MODEL}) 连接...")
+        elif provider == "volcano":
+            print(f"检查 火山引擎 ({ARK_MODEL}) 连接...")
         else:
             print(f"检查 Ollama ({OLLAMA_MODEL}) 连接...")
         return self.llm_provider.check_connection()
