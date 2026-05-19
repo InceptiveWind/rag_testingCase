@@ -96,3 +96,56 @@ class VectorStoreManager:
                 total += len(batch)
                 print(f"已添加第 {i+1}/{len(batches)} 批，当前累计 {total} 个文档块")
 
+    def delete_documents_by_source(self, source_pattern: str) -> int:
+        """根据源文件路径删除文档
+
+        Args:
+            source_pattern: 源文件路径或路径模式
+
+        Returns:
+            删除的文档数量
+        """
+        if self.vectorstore is None:
+            self.load_vectorstore()
+
+        if not self.vectorstore:
+            return 0
+
+        try:
+            # 获取所有文档，查找匹配 source 的
+            results = self.vectorstore.get()
+            if not results or not results.get('ids'):
+                return 0
+
+            ids_to_delete = []
+            for i, metadata in enumerate(results.get('metadatas', [])):
+                if metadata:
+                    source = metadata.get('source', '')
+                    if source_pattern in source:
+                        ids_to_delete.append(results['ids'][i])
+
+            if ids_to_delete:
+                self.vectorstore.delete(ids=ids_to_delete)
+                print(f"已删除 {len(ids_to_delete)} 个文档块（来源: {source_pattern}）")
+                return len(ids_to_delete)
+
+            return 0
+        except Exception as e:
+            print(f"删除文档失败: {e}")
+            return 0
+
+    def delete_all_documents(self):
+        """删除所有文档"""
+        if self.vectorstore is None:
+            self.load_vectorstore()
+
+        if self.vectorstore:
+            try:
+                # 获取所有文档ID并删除
+                results = self.vectorstore.get()
+                if results and results.get('ids'):
+                    self.vectorstore.delete(ids=results['ids'])
+                    print(f"已删除所有文档（共 {len(results['ids'])} 个）")
+            except Exception as e:
+                print(f"删除所有文档失败: {e}")
+

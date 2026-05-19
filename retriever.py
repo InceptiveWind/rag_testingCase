@@ -4,9 +4,69 @@
 """
 
 import os
+import hashlib
+import time
+from functools import wraps
 from typing import List, Tuple, Dict, Optional, Any
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
+from config import CACHE_TTL, CACHE_MAX_SIZE
+
+
+def _make_cache_key(*args, **kwargs):
+    """生成缓存的 key（用于不可哈希参数）"""
+    key_parts = []
+    for arg in args:
+        if isinstance(arg, (str, int, float, bool)):
+            key_parts.append(str(arg))
+        elif isinstance(arg, dict):
+            key_parts.append(str(sorted(arg.items())))
+        elif isinstance(arg, list):
+            key_parts.append(str(tuple(str(a) if not isinstance(a, str) else a for a in arg)))
+        else:
+            key_parts.append(repr(arg))
+    return hashlib.md5('|'.join(key_parts).encode()).hexdigest()
+
+
+def cached_retrieve(func):
+    """带 TTL 的缓存装饰器（用于检索方法）"""
+    cache = {}
+    cache_timestamps = {}
+
+    @wraps(func)
+    def wrapper(self, query, *args, **kwargs):
+        # 生成缓存key
+        cache_key = _make_cache_key(query, args, kwargs)
+
+        # 检查是否命中且未过期
+        current_time = time.time()
+        if cache_key in cache:
+            timestamp = cache_timestamps.get(cache_key, 0)
+            if current_time - timestamp < CACHE_TTL:
+                return cache[cache_key]
+
+        # 执行实际函数
+        result = func(self, query, *args, **kwargs)
+
+        # 缓存结果
+        cache[cache_key] = result
+        cache_timestamps[cache_key] = current_time
+
+        # 缓存大小限制
+        if len(cache) > CACHE_MAX_SIZE:
+            # 删除最早的缓存项
+            oldest_key = min(cache_timestamps.keys(), key=lambda k: cache_timestamps[k])
+            del cache[oldest_key]
+            del cache_timestamps[oldest_key]
+
+        return result
+
+    # 提供清除缓存的方法
+    wrapper.cache_clear = lambda: (cache.clear(), cache_timestamps.clear())
+    wrapper._cache = cache
+    wrapper._timestamps = cache_timestamps
+
+    return wrapper
 
 # BM25
 try:
@@ -173,8 +233,9 @@ class Retriever:
             print(f"重排序模型初始化失败: {e}")
             self.use_rerank = False
 
+    @cached_retrieve
     def retrieve(self, query: str, version: str = None, file_hash: str = None) -> List[Document]:
-        """检索与查询相关的文档
+        """检索与查询相关的文档（带缓存）
 
         Args:
             query: 查询文本

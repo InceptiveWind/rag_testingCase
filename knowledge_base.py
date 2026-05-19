@@ -3,8 +3,10 @@
 """
 
 import os
+import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from functools import lru_cache
 
 # 设置环境变量解决并行问题
 os.environ['TOKENIZERS_PARALLELISM'] = '0'
@@ -83,6 +85,11 @@ def create_llm_provider(config: dict = None):
 class KnowledgeBase:
     """RAG知识库管理器"""
 
+    # 类级别的线程锁，用于保护共享资源
+    _lock = threading.RLock()
+    # 缓存已加载的检索器
+    _retriever_cache: Dict[str, Retriever] = {}
+
     def __init__(self, config: dict = None):
         # 使用传入的配置或默认配置
         self.config = config or {}
@@ -113,120 +120,192 @@ class KnowledgeBase:
         self.advanced_retriever: Optional[AdvancedRetriever] = None
 
     def build_knowledge_base(self, force_rebuild: bool = False):
-        """构建知识库"""
-        # 初始化增量构建器
-        incremental = IncrementalBuilder()
+        """构建知识库（线程安全）"""
+        with self._lock:
+            # 初始化增量构建器
+            incremental = IncrementalBuilder()
 
-        # 获取所有支持的文件（支持文件和文件夹）
-        from document_loader import get_supported_extensions
-        all_files = []
+            # 获取所有支持的文件（支持文件和文件夹）
+            from document_loader import get_supported_extensions
+            all_files = []
 
-        if self.docs_dir.is_file():
-            # 指定的是单个文件
-            all_files = [self.docs_dir]
-        else:
-            # 指定的是文件夹
-            for ext in get_supported_extensions():
-                all_files.extend(self.docs_dir.rglob(f'*{ext}'))
+            if self.docs_dir.is_file():
+                # 指定的是单个文件
+                all_files = [self.docs_dir]
+            else:
+                # 指定的是文件夹
+                for ext in get_supported_extensions():
+                    all_files.extend(self.docs_dir.rglob(f'*{ext}'))
 
-        if not all_files:
-            print("未找到任何文档")
-            return False
+            if not all_files:
+                print("未找到任何文档")
+                return False
 
-        # 强制重建：清除所有状态
-        if force_rebuild:
-            print("强制重建，清除历史状态...")
-            incremental.clear()
-            # 删除向量存储
-            if self.vector_dir.exists():
-                import shutil
-                shutil.rmtree(self.vector_dir)
-                self.vector_dir.mkdir(parents=True, exist_ok=True)
+            # 强制重建：清除所有状态
+            if force_rebuild:
+                print("强制重建，清除历史状态...")
+                incremental.clear()
+                # 删除向量存储
+                if self.vector_dir.exists():
+                    import shutil
+                    shutil.rmtree(self.vector_dir)
+                    self.vector_dir.mkdir(parents=True, exist_ok=True)
+                # 清除缓存
+                self._retriever_cache.clear()
 
-        # 获取当前图片处理配置
-        enable_image_processing = self.config.get('enable_image_processing', ENABLE_IMAGE_PROCESSING)
-        print(f"图片处理配置: {'开启' if enable_image_processing else '关闭'}")
+            # 获取当前图片处理配置
+            enable_image_processing = self.config.get('enable_image_processing', ENABLE_IMAGE_PROCESSING)
+            print(f"图片处理配置: {'开启' if enable_image_processing else '关闭'}")
 
-        # 获取需要处理的文件（新增或修改）
-        changed_files = incremental.get_changed_files(all_files, enable_image_processing=enable_image_processing)
+            # 获取需要处理的文件（新增或修改）
+            changed_files = incremental.get_changed_files(all_files, enable_image_processing=enable_image_processing)
 
-        print(f"总文件数: {len(all_files)}")
-        print(f"需处理文件数: {len(changed_files)}")
+            # 检测已删除的文件
+            deleted_files = incremental.get_deleted_files(all_files)
+            if deleted_files:
+                print(f"检测到 {len(deleted_files)} 个已删除的文件")
+                # 先加载向量存储，然后删除这些文件的文档块
+                existing_store = self.vector_manager.load_vectorstore()
+                if existing_store:
+                    for deleted_file in deleted_files:
+                        self.vector_manager.delete_documents_by_source(deleted_file)
+                        incremental.remove_deleted_file(deleted_file)
 
-        # 加载文档（只加载变化的文件）
-        if changed_files:
-            # 使用自定义加载函数，只加载变化的文件
-            documents = self._load_changed_files(changed_files)
-        else:
-            documents = []
+            print(f"总文件数: {len(all_files)}")
+            print(f"需处理文件数: {len(changed_files)}")
 
-        if not documents and not incremental.file_states:
-            print("未找到任何文档，请先在docs目录下添加知识库文档")
-            return False
+            # 加载文档（只加载变化的文件）
+            if changed_files:
+                # 使用自定义加载函数，只加载变化的文件
+                documents = self._load_changed_files(changed_files)
+            else:
+                documents = []
 
-        # 如果没有新文档需要处理，但已有知识库
-        if not documents:
-            existing_store = self.vector_manager.load_vectorstore()
-            if existing_store:
-                print("知识库已是最新，无需更新")
-                self.retriever = self._create_retriever(existing_store)
-                return True
+            if not documents and not incremental.file_states:
+                print("未找到任何文档，请先在docs目录下添加知识库文档")
+                return False
 
-        # 预处理文档
-        if self.config.get('enable_preprocessor', ENABLE_PREPROCESSOR):
-            preprocessor = DocumentPreprocessor(
-                enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
-                llm_provider=self.llm_provider,
-                enable_image_processing=enable_image_processing
+            # 如果没有新文档需要处理，但已有知识库
+            if not documents:
+                existing_store = self.vector_manager.load_vectorstore()
+                if existing_store:
+                    print("知识库已是最新，无需更新")
+                    self.retriever = self._create_retriever(existing_store)
+                    return True
+
+            # 预处理文档
+            if self.config.get('enable_preprocessor', ENABLE_PREPROCESSOR):
+                preprocessor = DocumentPreprocessor(
+                    enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
+                    llm_provider=self.llm_provider,
+                    enable_image_processing=enable_image_processing
+                )
+                documents = preprocessor.preprocess(documents)
+
+            # 测试场景化拆分（按章节拆分，提取测试点）
+            scenario_splitter = TestScenarioSplitter(
+                enable_llm=False,
+                llm_provider=self.llm_provider
             )
-            documents = preprocessor.preprocess(documents)
+            documents = scenario_splitter.split_documents(documents)
+            print(f"  测试场景化拆分后: {len(documents)} 个场景切片")
 
-        # 测试场景化拆分（按章节拆分，提取测试点）
-        scenario_splitter = TestScenarioSplitter(
-            enable_llm=False,
-            llm_provider=self.llm_provider
-        )
-        documents = scenario_splitter.split_documents(documents)
-        print(f"  测试场景化拆分后: {len(documents)} 个场景切片")
+            # 分割文档
+            chunks = self.text_splitter.split_documents(documents)
 
-        # 分割文档
-        chunks = self.text_splitter.split_documents(documents)
+            # 检查是否已有向量存储
+            existing_store = self.vector_manager.load_vectorstore()
 
-        # 检查是否已有向量存储
-        existing_store = self.vector_manager.load_vectorstore()
+            if existing_store and changed_files:
+                # 增量添加
+                print(f"增量添加 {len(chunks)} 个文档块...")
+                self.vector_manager.add_documents(chunks)
+                vectorstore = existing_store
+            else:
+                # 创建新的向量存储
+                print("创建新的向量存储...")
+                vectorstore = self.vector_manager.create_vectorstore(chunks)
 
-        if existing_store and changed_files:
-            # 增量添加
-            print(f"增量添加 {len(chunks)} 个文档块...")
-            self.vector_manager.add_documents(chunks)
-            vectorstore = existing_store
-        else:
-            # 创建新的向量存储
-            print("创建新的向量存储...")
-            vectorstore = self.vector_manager.create_vectorstore(chunks)
+            # 标记文件已处理（记录图片处理状态）
+            incremental.mark_processed(changed_files, enable_image_processing=enable_image_processing)
 
-        # 标记文件已处理（记录图片处理状态）
-        incremental.mark_processed(changed_files, enable_image_processing=enable_image_processing)
+            # 创建检索器并更新缓存
+            self.retriever = self._create_retriever(vectorstore)
+            cache_key = str(self.vector_dir)
+            self._retriever_cache[cache_key] = self.retriever
 
-        # 创建检索器
-        self.retriever = self._create_retriever(vectorstore)
+            # 清除检索缓存
+            if hasattr(self.retriever, 'retrieve') and hasattr(self.retriever.retrieve, 'cache_clear'):
+                self.retriever.retrieve.cache_clear()
+                print("检索缓存已清除")
 
-        print("知识库构建完成！")
-        return True
+            print("知识库构建完成！")
+            return True
 
     def load_knowledge_base(self) -> bool:
-        """加载已存在的知识库"""
-        # 如果已经加载过且retriever存在，直接返回
-        if self.retriever is not None:
-            return True
+        """加载已存在的知识库（线程安全，带缓存）"""
+        with self._lock:
+            # 先检查缓存
+            cache_key = str(self.vector_dir)
+            if cache_key in self._retriever_cache:
+                self.retriever = self._retriever_cache[cache_key]
+                return True
 
-        vectorstore = self.vector_manager.load_vectorstore()
+            # 如果已经加载过且retriever存在，直接返回
+            if self.retriever is not None:
+                return True
 
-        if vectorstore:
-            self.retriever = self._create_retriever(vectorstore)
-            return True
+            vectorstore = self.vector_manager.load_vectorstore()
 
-        return False
+            if vectorstore:
+                self.retriever = self._create_retriever(vectorstore)
+                # 存入缓存
+                self._retriever_cache[cache_key] = self.retriever
+                return True
+
+            return False
+
+    def delete_document(self, source_pattern: str) -> int:
+        """删除指定源文件的文档（线程安全）
+
+        Args:
+            source_pattern: 源文件路径或路径模式
+
+        Returns:
+            删除的文档块数量
+        """
+        with self._lock:
+            # 从向量存储中删除
+            deleted_count = self.vector_manager.delete_documents_by_source(source_pattern)
+
+            # 从增量构建状态中移除
+            incremental = IncrementalBuilder()
+            incremental.remove_deleted_file(source_pattern)
+
+            # 清除检索缓存（如果存在）
+            if self.retriever and hasattr(self.retriever, 'retrieve') and hasattr(self.retriever.retrieve, 'cache_clear'):
+                self.retriever.retrieve.cache_clear()
+
+            # 清除知识库缓存，因为知识库已改变
+            self._retriever_cache.clear()
+
+            # 重新加载检索器（如果之前已加载）
+            if self.retriever:
+                self.load_knowledge_base()
+
+            return deleted_count
+
+    def clear_cache(self):
+        """清除所有缓存"""
+        with self._lock:
+            # 清除知识库缓存
+            self._retriever_cache.clear()
+
+            # 清除检索器缓存
+            if self.retriever and hasattr(self.retriever, 'retrieve') and hasattr(self.retriever.retrieve, 'cache_clear'):
+                self.retriever.retrieve.cache_clear()
+
+            print("所有缓存已清除")
 
     def query(self, query_text: str, return_context: bool = True, num_cases: int = 10, examples: str = None, version: str = None):
         """查询并生成测试用例

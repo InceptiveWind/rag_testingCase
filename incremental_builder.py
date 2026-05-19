@@ -87,6 +87,35 @@ class IncrementalBuilder:
 
         return changed_files
 
+    def get_deleted_files(self, file_paths: List[Path]) -> List[str]:
+        """
+        获取已删除的文件列表
+
+        Args:
+            file_paths: 当前存在的所有文件路径
+
+        Returns:
+            已删除的文件路径列表
+        """
+        current_files_set: Set[str] = set(str(fp) for fp in file_paths)
+        known_files_set: Set[str] = set(self.file_states.keys())
+
+        # 找出在记录中但不在当前文件列表中的文件
+        deleted_files = list(known_files_set - current_files_set)
+        return deleted_files
+
+    def remove_deleted_file(self, file_path: str):
+        """
+        从状态文件中移除已删除的文件记录
+
+        Args:
+            file_path: 要移除的文件路径
+        """
+        if file_path in self.file_states:
+            del self.file_states[file_path]
+            self._save_state()
+            print(f"已从状态文件中移除: {file_path}")
+
     def mark_processed(self, file_paths: List[Path], enable_image_processing: bool = None):
         """标记文件已处理
 

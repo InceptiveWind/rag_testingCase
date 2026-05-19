@@ -4,10 +4,13 @@
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 
-# 加载 .env 文件
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    # 加载 .env 文件
+    load_dotenv()
+except ImportError:
+    print("Warning: python-dotenv not found, skipping .env loading")
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent
@@ -44,6 +47,8 @@ CHUNK_SIZE = 1500  # 文档分块大小
 CHUNK_OVERLAP = 300  # 分块重叠大小
 TOP_K = 5  # 检索Top-K个相关文档
 MAX_TOKENS = 4096  # LLM最大输出token数
+MAX_RETRIES = 3  # LLM调用最大重试次数
+RETRY_DELAY = 1.0  # 重试延迟（秒）
 
 # 检索配置
 USE_HYBRID_RETRIEVAL = True  # 使用混合检索 (BM25 + 向量)
@@ -52,6 +57,15 @@ USE_QUERY_REWRITE = True  # 使用查询改写（多路召回）
 VECTOR_WEIGHT = 0.5  # 向量检索权重
 BM25_WEIGHT = 0.3  # BM25权重
 RERANK_TOP_K = 10  # 重排序候选数量
+
+# 缓存配置
+CACHE_TTL = 300  # 缓存默认过期时间（秒）
+CACHE_MAX_SIZE = 1000  # 缓存最大条目数
+
+# Web 配置
+MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 最大请求内容大小（50MB）
+DEFAULT_PORT = 5050  # 默认服务端口
+DEFAULT_HOST = '127.0.0.1'  # 默认监听地址
 
 # 预处理配置
 ENABLE_PREPROCESSOR = True  # 启用文档预处理
