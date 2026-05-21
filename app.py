@@ -12,6 +12,66 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 from pathlib import Path
 from werkzeug.utils import secure_filename
 
+# ========== 监控 nul 文件的创建 ==========
+import builtins
+import time
+original_open = builtins.open
+
+def monitored_open(file, *args, **kwargs):
+    # 检查文件名是否包含 'nul'
+    filename = str(file)
+    if 'nul' in filename.lower() or filename.lower() == 'nul':
+        print(f"\n{'='*60}")
+        print(f"!!! 警告：检测到尝试打开可能是 nul 的文件！")
+        print(f"文件名: {filename}")
+        print(f"时间: {time.ctime()}")
+        print(f"参数: args={args}, kwargs={kwargs}")
+        print(f"\n调用堆栈:")
+        print('-'*60)
+        traceback.print_stack()
+        print(f"{'='*60}\n")
+    
+    return original_open(file, *args, **kwargs)
+
+# 替换内置的 open 函数
+builtins.open = monitored_open
+
+# 也监控 Path 的 write_text 和 write_bytes
+original_path_write_text = Path.write_text
+original_path_write_bytes = Path.write_bytes
+
+def monitored_write_text(self, *args, **kwargs):
+    filename = str(self)
+    if 'nul' in filename.lower() or filename.lower() == 'nul':
+        print(f"\n{'='*60}")
+        print(f"!!! 警告：检测到尝试写入可能是 nul 的文件！")
+        print(f"文件名: {filename}")
+        print(f"时间: {time.ctime()}")
+        print(f"\n调用堆栈:")
+        print('-'*60)
+        traceback.print_stack()
+        print(f"{'='*60}\n")
+    return original_path_write_text(self, *args, **kwargs)
+
+def monitored_write_bytes(self, *args, **kwargs):
+    filename = str(self)
+    if 'nul' in filename.lower() or filename.lower() == 'nul':
+        print(f"\n{'='*60}")
+        print(f"!!! 警告：检测到尝试写入可能是 nul 的文件！")
+        print(f"文件名: {filename}")
+        print(f"时间: {time.ctime()}")
+        print(f"\n调用堆栈:")
+        print('-'*60)
+        traceback.print_stack()
+        print(f"{'='*60}\n")
+    return original_path_write_bytes(self, *args, **kwargs)
+
+Path.write_text = monitored_write_text
+Path.write_bytes = monitored_write_bytes
+
+print("nul 文件监控已启动...")
+# ========================================
+
 # 添加项目根目录到路径
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -278,7 +338,7 @@ def list_cases():
         cases_dir = Path(CASES_OUTPUT_DIR)
 
         if not cases_dir.exists():
-            return create_success_response(data=[], message='测试用例目录不存在')
+            return jsonify({'status': 'success', 'cases': []})
 
         cases: List[Dict[str, Any]] = []
         for f in cases_dir.glob('*.md'):
@@ -291,7 +351,7 @@ def list_cases():
         # 按修改时间排序
         cases.sort(key=lambda x: x['modified'], reverse=True)
 
-        return create_success_response(data={'cases': cases})
+        return jsonify({'status': 'success', 'cases': cases})
     except Exception as e:
         log_exception("List cases")
         return create_error_response(f'获取用例列表失败: {str(e)}')
@@ -384,14 +444,17 @@ def status():
 
         llm_model = ARK_MODEL if LLM_PROVIDER == "volcano" else MINIMAX_MODEL
 
-        return create_success_response(data={
-            'has_vectorstore': has_vectorstore,
-            'doc_count': doc_count,
-            'vector_doc_count': vector_doc_count,
-            'build_status': build_status,
-            'llm_provider': LLM_PROVIDER,
-            'llm_model': llm_model,
-            'embedding_model': EMBEDDING_MODEL
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'has_vectorstore': has_vectorstore,
+                'doc_count': doc_count,
+                'vector_doc_count': vector_doc_count,
+                'build_status': build_status,
+                'llm_provider': LLM_PROVIDER,
+                'llm_model': llm_model,
+                'embedding_model': EMBEDDING_MODEL
+            }
         })
     except Exception as e:
         log_exception("Get system status")
@@ -408,10 +471,10 @@ def list_versions():
     try:
         kb = get_knowledge_base()
         if not kb.load_knowledge_base():
-            return create_success_response(data={'versions': []})
+            return jsonify({'status': 'success', 'versions': []})
 
         versions = kb.retriever.get_all_versions()
-        return create_success_response(data={'versions': versions})
+        return jsonify({'status': 'success', 'versions': versions})
     except Exception as e:
         log_exception("List versions")
         return create_error_response(f'获取版本列表失败: {str(e)}')
@@ -471,12 +534,12 @@ def upload_file():
     """
     try:
         if 'file' not in request.files:
-            return create_error_response('没有选择文件')
+            return jsonify({'status': 'error', 'message': '没有选择文件'})
 
         files = request.files.getlist('file')
 
         if not files or all(f.filename == '' for f in files):
-            return create_error_response('没有选择文件')
+            return jsonify({'status': 'error', 'message': '没有选择文件'})
 
         uploaded_count = 0
         uploaded_files: List[str] = []
@@ -486,7 +549,7 @@ def upload_file():
                 continue
 
             if not allowed_file(file.filename):
-                return create_error_response(f'不支持的文件类型: {file.filename}')
+                return jsonify({'status': 'error', 'message': f'不支持的文件类型: {file.filename}'})
 
             # 生成安全的文件名
             original_filename = file.filename
@@ -499,8 +562,11 @@ def upload_file():
             uploaded_count += 1
             uploaded_files.append(filename)
 
-        return create_success_response(data={'files': uploaded_files}, 
-                                       message=f'成功上传 {uploaded_count} 个文件')
+        return jsonify({
+            'status': 'success',
+            'message': f'成功上传 {uploaded_count} 个文件',
+            'files': uploaded_files
+        })
 
     except Exception as e:
         log_exception("Upload file")
@@ -518,7 +584,7 @@ def list_documents():
         docs_dir = Path(KNOWLEDGE_BASE_DIR)
 
         if not docs_dir.exists():
-            return create_success_response(data={'documents': []})
+            return jsonify({'status': 'success', 'documents': []})
 
         documents: List[Dict[str, Any]] = []
         for f in docs_dir.rglob('*'):
@@ -533,7 +599,7 @@ def list_documents():
         # 按修改时间排序
         documents.sort(key=lambda x: x['modified'], reverse=True)
 
-        return create_success_response(data={'documents': documents})
+        return jsonify({'status': 'success', 'documents': documents})
     except Exception as e:
         log_exception("List documents")
         return create_error_response(f'获取文档列表失败: {str(e)}')
