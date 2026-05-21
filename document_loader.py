@@ -364,39 +364,47 @@ class DocumentLoader:
         try:
             # 尝试使用 pywin32 读取 .doc 文件
             import win32com.client
+            import pythoncom
             import os
 
-            # 创建 Word 应用实例
-            word = win32com.client.Dispatch("Word.Application")
-            word.Visible = False
+            # 初始化 COM 库（必须在主线程中）
+            pythoncom.CoInitialize()
 
             try:
-                # 打开文档
-                doc = word.Documents.Open(str(file_path.absolute()))
-                paragraphs = []
+                # 创建 Word 应用实例
+                word = win32com.client.Dispatch("Word.Application")
+                word.Visible = False
 
-                # 提取所有段落
-                for para in doc.Paragraphs:
-                    text = para.Range.Text.strip()
-                    if text:
-                        paragraphs.append(text)
+                try:
+                    # 打开文档
+                    doc = word.Documents.Open(str(file_path.absolute()))
+                    paragraphs = []
 
-                # 释放文档
-                doc.Close(False)
+                    # 提取所有段落
+                    for para in doc.Paragraphs:
+                        text = para.Range.Text.strip()
+                        if text:
+                            paragraphs.append(text)
 
-                if paragraphs:
-                    content = '\n\n'.join(paragraphs)
-                    doc = Document(
-                        page_content=content,
-                        metadata={'source': str(file_path), 'type': 'doc'}
-                    )
-                    print(f"成功加载: {file_path.name}")
-                    return self._add_version_metadata([doc], file_path)
-                else:
-                    print(f"Word文件内容为空: {file_path.name}")
-                    return None
+                    # 释放文档
+                    doc.Close(False)
+
+                    if paragraphs:
+                        content = '\n\n'.join(paragraphs)
+                        doc = Document(
+                            page_content=content,
+                            metadata={'source': str(file_path), 'type': 'doc'}
+                        )
+                        print(f"成功加载: {file_path.name}")
+                        return self._add_version_metadata([doc], file_path)
+                    else:
+                        print(f"Word文件内容为空: {file_path.name}")
+                        return None
+                finally:
+                    word.Quit()
             finally:
-                word.Quit()
+                # 释放 COM 库
+                pythoncom.CoUninitialize()
         except ImportError:
             print(f"读取 .doc 文件需要 pywin32 库，请运行: pip install pywin32")
             print(f"或者将 {file_path.name} 转换为 .docx 格式")

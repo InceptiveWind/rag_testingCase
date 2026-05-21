@@ -175,9 +175,10 @@ class KnowledgeBase:
             print(f"需处理文件数: {len(changed_files)}")
 
             # 加载文档（只加载变化的文件）
+            processed_files = []
             if changed_files:
                 # 使用自定义加载函数，只加载变化的文件
-                documents = self._load_changed_files(changed_files)
+                documents, processed_files = self._load_changed_files(changed_files)
             else:
                 documents = []
 
@@ -185,49 +186,61 @@ class KnowledgeBase:
                 print("未找到任何文档，请先在docs目录下添加知识库文档")
                 return False
 
-            # 如果没有新文档需要处理，但已有知识库
-            if not documents:
+            # 检查是否有文档需要处理（即使加载失败，也要标记文件已处理）
+            has_files_to_process = len(processed_files) > 0
+            
+            if has_files_to_process:
+                if documents:
+                    # 有成功加载的文档，继续处理
+                    # 预处理文档
+                    if self.config.get('enable_preprocessor', ENABLE_PREPROCESSOR):
+                        preprocessor = DocumentPreprocessor(
+                            enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
+                            llm_provider=self.llm_provider,
+                            enable_image_processing=enable_image_processing
+                        )
+                        documents = preprocessor.preprocess(documents)
+
+                    # 测试场景化拆分（按章节拆分，提取测试点）
+                    scenario_splitter = TestScenarioSplitter(
+                        enable_llm=False,
+                        llm_provider=self.llm_provider
+                    )
+                    documents = scenario_splitter.split_documents(documents)
+                    print(f"  测试场景化拆分后: {len(documents)} 个场景切片")
+
+                    # 分割文档
+                    chunks = self.text_splitter.split_documents(documents)
+
+                    # 检查是否已有向量存储
+                    existing_store = self.vector_manager.load_vectorstore()
+
+                    if existing_store and documents:
+                        # 增量添加
+                        print(f"增量添加 {len(chunks)} 个文档块...")
+                        self.vector_manager.add_documents(chunks)
+                        vectorstore = existing_store
+                    else:
+                        # 创建新的向量存储（如果有文档）
+                        if documents:
+                            print("创建新的向量存储...")
+                            vectorstore = self.vector_manager.create_vectorstore(chunks)
+                        else:
+                            vectorstore = self.vector_manager.load_vectorstore()
+                else:
+                    # 没有成功加载的文档，但有尝试过处理文件
+                    vectorstore = self.vector_manager.load_vectorstore()
+                
+                # 标记所有处理过的文件为已处理（包括失败的），避免下次重复尝试
+                incremental.mark_processed(processed_files, enable_image_processing=enable_image_processing)
+                print(f"已记录 {len(processed_files)} 个文件的处理状态")
+            else:
+                # 如果没有新文档需要处理，但已有知识库
                 existing_store = self.vector_manager.load_vectorstore()
                 if existing_store:
                     print("知识库已是最新，无需更新")
                     self.retriever = self._create_retriever(existing_store)
                     return True
-
-            # 预处理文档
-            if self.config.get('enable_preprocessor', ENABLE_PREPROCESSOR):
-                preprocessor = DocumentPreprocessor(
-                    enable_llm=self.config.get('enable_llm_tag', ENABLE_LLM_TAG),
-                    llm_provider=self.llm_provider,
-                    enable_image_processing=enable_image_processing
-                )
-                documents = preprocessor.preprocess(documents)
-
-            # 测试场景化拆分（按章节拆分，提取测试点）
-            scenario_splitter = TestScenarioSplitter(
-                enable_llm=False,
-                llm_provider=self.llm_provider
-            )
-            documents = scenario_splitter.split_documents(documents)
-            print(f"  测试场景化拆分后: {len(documents)} 个场景切片")
-
-            # 分割文档
-            chunks = self.text_splitter.split_documents(documents)
-
-            # 检查是否已有向量存储
-            existing_store = self.vector_manager.load_vectorstore()
-
-            if existing_store and changed_files:
-                # 增量添加
-                print(f"增量添加 {len(chunks)} 个文档块...")
-                self.vector_manager.add_documents(chunks)
-                vectorstore = existing_store
-            else:
-                # 创建新的向量存储
-                print("创建新的向量存储...")
-                vectorstore = self.vector_manager.create_vectorstore(chunks)
-
-            # 标记文件已处理（记录图片处理状态）
-            incremental.mark_processed(changed_files, enable_image_processing=enable_image_processing)
 
             # 创建检索器并更新缓存
             self.retriever = self._create_retriever(vectorstore)
@@ -332,7 +345,11 @@ class KnowledgeBase:
             self.retriever.print_retrieved_docs(context_docs)
 
         # 生成测试用例（支持批量）
-        result = self.test_generator.generate(query_text, context_docs, num_cases=num_cases, examples=examples)
+        batch_size = min(num_cases, 36)
+        result = self.test_generator.generate(
+            query_text, context_docs, num_cases=num_cases, 
+            batch_size=batch_size, max_retries=1, examples=examples
+        )
         # 优先使用Excel格式保存
         filepath = self.test_generator.save_to_excel(result)
 
@@ -364,9 +381,14 @@ class KnowledgeBase:
             rerank_top_k=self.config.get('rerank_top_k', RERANK_TOP_K)
         )
 
-    def _load_changed_files(self, file_paths: List[Path]) -> List:
-        """只加载变化的文件"""
+    def _load_changed_files(self, file_paths: List[Path]) -> tuple[List, List[Path]]:
+        """只加载变化的文件
+        
+        Returns:
+            (成功加载的文档列表, 所有尝试处理过的文件列表，包括成功和失败的)
+        """
         all_docs = []
+        processed_files = []
         from document_loader import get_supported_extensions
 
         total = len(file_paths)
@@ -374,16 +396,18 @@ class KnowledgeBase:
 
         for i, file_path in enumerate(file_paths, 1):
             print(f"[{i}/{total}] 加载: {file_path.name}")
+            processed_files.append(file_path)
 
             try:
                 docs = self.document_loader.load_file(file_path)
                 if docs:
                     all_docs.extend(docs)
+                    print(f"成功加载: {file_path.name}")
             except Exception as e:
                 print(f"加载失败 {file_path.name}: {e}")
 
         print(f"文件加载完成，共 {len(all_docs)} 个文档对象")
-        return all_docs
+        return all_docs, processed_files
 
     def add_documents(self, docs_dir: Path = None):
         """添加新文档到知识库"""

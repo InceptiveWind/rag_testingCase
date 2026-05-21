@@ -18,13 +18,37 @@ class IncrementalBuilder:
         self.file_states: Dict[str, dict] = {}
         self._load_state()
 
+    @staticmethod
+    def _normalize_path(file_path: Path | str) -> str:
+        """
+        规范化文件路径，确保使用统一的格式（绝对路径）
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            规范化后的路径字符串
+        """
+        if isinstance(file_path, str):
+            file_path = Path(file_path)
+        return str(file_path.resolve())
+
     def _load_state(self):
         """加载状态文件"""
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r', encoding='utf-8') as f:
-                    self.file_states = json.load(f)
-            except:
+                    raw_states = json.load(f)
+                # 迁移旧数据：规范化所有路径
+                self.file_states = {}
+                for file_path, state in raw_states.items():
+                    normalized_path = self._normalize_path(file_path)
+                    self.file_states[normalized_path] = state
+                if len(self.file_states) != len(raw_states):
+                    # 有数据迁移，保存一下
+                    self._save_state()
+            except Exception as e:
+                print(f"加载状态文件失败: {e}")
                 self.file_states = {}
 
     def _save_state(self):
@@ -62,7 +86,7 @@ class IncrementalBuilder:
         all_known_files: Set[str] = set(self.file_states.keys())
 
         for file_path in file_paths:
-            file_key = str(file_path)
+            file_key = self._normalize_path(file_path)
 
             # 文件不存在于记录中，需要处理
             if file_key not in all_known_files:
@@ -97,7 +121,7 @@ class IncrementalBuilder:
         Returns:
             已删除的文件路径列表
         """
-        current_files_set: Set[str] = set(str(fp) for fp in file_paths)
+        current_files_set: Set[str] = set(self._normalize_path(fp) for fp in file_paths)
         known_files_set: Set[str] = set(self.file_states.keys())
 
         # 找出在记录中但不在当前文件列表中的文件
@@ -111,10 +135,11 @@ class IncrementalBuilder:
         Args:
             file_path: 要移除的文件路径
         """
-        if file_path in self.file_states:
-            del self.file_states[file_path]
+        normalized_path = self._normalize_path(file_path)
+        if normalized_path in self.file_states:
+            del self.file_states[normalized_path]
             self._save_state()
-            print(f"已从状态文件中移除: {file_path}")
+            print(f"已从状态文件中移除: {normalized_path}")
 
     def mark_processed(self, file_paths: List[Path], enable_image_processing: bool = None):
         """标记文件已处理
@@ -124,7 +149,7 @@ class IncrementalBuilder:
             enable_image_processing: 当前图片处理配置
         """
         for file_path in file_paths:
-            file_key = str(file_path)
+            file_key = self._normalize_path(file_path)
             self.file_states[file_key] = {
                 'hash': self._get_file_hash(file_path),
                 'processed_at': datetime.now().isoformat(),

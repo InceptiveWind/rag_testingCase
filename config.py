@@ -53,7 +53,7 @@ RETRY_DELAY = 1.0  # 重试延迟（秒）
 # 检索配置
 USE_HYBRID_RETRIEVAL = True  # 使用混合检索 (BM25 + 向量)
 USE_RERANK = True  # 使用重排序
-USE_QUERY_REWRITE = True  # 使用查询改写（多路召回）
+USE_QUERY_REWRITE = False  # 使用查询改写（多路召回）
 VECTOR_WEIGHT = 0.5  # 向量检索权重
 BM25_WEIGHT = 0.3  # BM25权重
 RERANK_TOP_K = 10  # 重排序候选数量

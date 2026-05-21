@@ -293,13 +293,88 @@
                 });
         }
 
+        // 构建状态标志
+        let isBuilding = false;
+
+        // 设置所有删除按钮的禁用状态
+        function setDeleteButtonsDisabled(disabled) {
+            const deleteButtons = document.querySelectorAll('button[onclick^="deleteDocument"]');
+            deleteButtons.forEach(btn => {
+                btn.disabled = disabled;
+                if (disabled) {
+                    btn.style.opacity = '0.5';
+                    btn.style.cursor = 'not-allowed';
+                } else {
+                    btn.style.opacity = '1';
+                    btn.style.cursor = 'pointer';
+                }
+            });
+        }
+
+        // 检查是否需要构建
+        function checkBuildNeeded() {
+            fetch('/check-build-needed')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        const d = data.data;
+                        const buildBtn = document.querySelector('button[onclick="buildKnowledgeBase()"]');
+                        
+                        if (d.needs_build) {
+                            buildBtn.disabled = false;
+                            buildBtn.style.opacity = '1';
+                            buildBtn.style.cursor = 'pointer';
+                            
+                            // 显示提示信息
+                            let hint = '';
+                            if (d.new_files_count > 0) {
+                                hint += d.new_files_count + '个新增文件 ';
+                            }
+                            if (d.modified_files_count > 0) {
+                                hint += d.modified_files_count + '个修改文件 ';
+                            }
+                            if (d.deleted_files_count > 0) {
+                                hint += d.deleted_files_count + '个删除文件 ';
+                            }
+                            if (hint) {
+                                buildBtn.title = '检测到' + hint.trim() + '，点击构建';
+                            }
+                        } else {
+                            buildBtn.disabled = true;
+                            buildBtn.style.opacity = '0.5';
+                            buildBtn.style.cursor = 'not-allowed';
+                            buildBtn.title = '知识库已是最新，无需构建';
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error('检查构建状态失败:', err);
+                });
+        }
+
         // 构建知识库（默认增量构建）
         function buildKnowledgeBase() {
             const resultDiv = document.getElementById('buildResult');
+            const buildBtn = document.querySelector('button[onclick="buildKnowledgeBase()"]');
+            
+            // 先检查是否需要构建
+            if (buildBtn.disabled) {
+                alert('知识库已是最新，无需构建');
+                return;
+            }
 
             // 固定使用增量构建
             const isFullBuild = false;
             const modeText = '增量';
+
+            // 设置构建状态
+            isBuilding = true;
+            setDeleteButtonsDisabled(true);
+            
+            // 构建过程中禁用按钮
+            buildBtn.disabled = true;
+            buildBtn.style.opacity = '0.5';
+            buildBtn.style.cursor = 'not-allowed';
 
             resultDiv.innerHTML = '<div class="loading"><span class="spinner"></span>正在执行' + modeText + '构建，请稍候...</div>';
 
@@ -312,9 +387,17 @@
                         resultDiv.innerHTML = '<div class="error">' + data.message + '</div>';
                     }
                     loadStatus();
+                    loadDocuments();
+                    checkBuildNeeded();
                 })
                 .catch(err => {
                     resultDiv.innerHTML = '<div class="error">构建失败: ' + err + '</div>';
+                })
+                .finally(() => {
+                    // 构建完成，恢复状态
+                    isBuilding = false;
+                    setDeleteButtonsDisabled(false);
+                    checkBuildNeeded();
                 });
         }
 
@@ -346,6 +429,7 @@
                     fileInput.value = '';
                     loadDocuments();
                     loadStatus();
+                    checkBuildNeeded();
                 } else {
                     resultDiv.innerHTML = '<div class="error">' + data.message + '</div>';
                 }
@@ -468,10 +552,18 @@
             }
 
             listDiv.innerHTML = html;
+            
+            // 重新设置删除按钮状态
+            setDeleteButtonsDisabled(isBuilding);
         }
 
         // 删除文档
         function deleteDocument(path) {
+            if (isBuilding) {
+                alert('知识库正在构建中，请稍后再删除文件');
+                return;
+            }
+            
             if (!confirm('确定要删除这个文件吗？')) return;
 
             fetch('/documents/' + decodeURIComponent(path), { method: 'DELETE' })
@@ -480,6 +572,7 @@
                     if (data.status === 'success') {
                         loadDocuments();
                         loadStatus();
+                        checkBuildNeeded();
                     } else {
                         alert(data.message);
                     }
@@ -616,6 +709,7 @@
         // 页面加载时获取状态
         loadStatus();
         loadDocuments();
+        checkBuildNeeded();
     </script>
 </body>
 </html>

@@ -97,6 +97,7 @@ from config import (
     MAX_CONTENT_LENGTH,
     DEFAULT_PORT,
     DEFAULT_HOST,
+    ENABLE_IMAGE_PROCESSING,
 )
 
 app = Flask(__name__)
@@ -418,7 +419,20 @@ def load_file_states():
     try:
         import json
         with open(state_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            raw_states = json.load(f)
+        # 规范化所有路径
+        normalized_states = {}
+        for file_path, state in raw_states.items():
+            try:
+                if isinstance(file_path, str):
+                    normalized_path = str(Path(file_path).resolve())
+                else:
+                    normalized_path = str(file_path.resolve())
+                normalized_states[normalized_path] = state
+            except Exception:
+                # 如果路径无法解析，保留原路径
+                normalized_states[file_path] = state
+        return normalized_states
     except Exception:
         return {}
 
@@ -456,8 +470,27 @@ def status():
                 supported_files.extend(docs_dir.rglob(f'*{ext}'))
         doc_count = len(supported_files)
 
-        # 检查已入库的文档数量
+        # 检查已入库的文档数量，先清理已删除文件的记录
         file_states = load_file_states()
+        current_file_paths = set(str(p.resolve()) for p in supported_files)
+        
+        # 清理状态文件中不存在的文件记录
+        state_file = VECTOR_STORE_DIR / ".file_state.json"
+        deleted_keys = []
+        for key in list(file_states.keys()):
+            if key not in current_file_paths:
+                deleted_keys.append(key)
+                del file_states[key]
+        
+        # 保存清理后的状态
+        if deleted_keys:
+            try:
+                import json
+                with open(state_file, 'w', encoding='utf-8') as f:
+                    json.dump(file_states, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        
         vector_doc_count = len(file_states)
 
         # 判断构建状态
@@ -681,6 +714,61 @@ def delete_document(filename: str):
     except Exception as e:
         log_exception("Delete document")
         return create_error_response(f'删除失败: {str(e)}')
+
+
+@app.route('/check-build-needed')
+def check_build_needed():
+    """检查是否有需要构建的文件
+
+    Returns:
+        JSON 响应，包含是否需要构建、新增文件数、修改文件数、删除文件数
+    """
+    try:
+        from incremental_builder import IncrementalBuilder
+        from document_loader import get_supported_extensions
+
+        # 获取所有支持的文件
+        docs_dir = Path(KNOWLEDGE_BASE_DIR)
+        all_files = []
+        if docs_dir.is_file():
+            all_files = [docs_dir]
+        elif docs_dir.exists():
+            for ext in get_supported_extensions():
+                all_files.extend(docs_dir.rglob(f'*{ext}'))
+
+        # 初始化增量构建器
+        incremental = IncrementalBuilder()
+
+        # 获取需要处理的文件
+        enable_image_processing = ENABLE_IMAGE_PROCESSING
+        changed_files = incremental.get_changed_files(all_files, enable_image_processing=enable_image_processing)
+
+        # 获取已删除的文件
+        deleted_files = incremental.get_deleted_files(all_files)
+
+        # 统计新增和修改的文件
+        new_files = []
+        modified_files = []
+        for file_path in changed_files:
+            file_key = str(file_path.resolve())
+            if file_key not in incremental.file_states:
+                new_files.append(file_key)
+            else:
+                modified_files.append(file_key)
+
+        return create_success_response(data={
+            'needs_build': len(changed_files) > 0 or len(deleted_files) > 0,
+            'new_files_count': len(new_files),
+            'modified_files_count': len(modified_files),
+            'deleted_files_count': len(deleted_files),
+            'total_changes_count': len(changed_files) + len(deleted_files),
+            'new_files': new_files,
+            'modified_files': modified_files,
+            'deleted_files': deleted_files
+        })
+    except Exception as e:
+        log_exception("Check build needed")
+        return create_error_response(f'检查失败: {str(e)}')
 
 
 def ensure_directories() -> None:
