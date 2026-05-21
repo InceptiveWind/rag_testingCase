@@ -79,6 +79,25 @@
         .status-item .value.partial {
             color: #d4a017;
         }
+        .doc-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            margin-right: 8px;
+        }
+        .badge-built {
+            background: #d4edda;
+            color: #155724;
+        }
+        .badge-unbuilt {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .badge-unsupported {
+            background: #f8d7da;
+            color: #721c24;
+        }
         .btn {
             background: #667eea;
             color: white;
@@ -404,8 +423,16 @@
             html += '<tr style="background: #f8f9fa;"><th style="padding: 8px; text-align: left;">文件名</th><th style="padding: 8px; text-align: right;">操作</th></tr>';
             pageDocs.forEach(doc => {
                 const size = (doc.size / 1024).toFixed(1);
+                let badge = '';
+                if (doc.is_supported === false) {
+                    badge = '<span class="doc-badge badge-unsupported">不支持</span>';
+                } else if (doc.is_built === true) {
+                    badge = '<span class="doc-badge badge-built">已构建</span>';
+                } else {
+                    badge = '<span class="doc-badge badge-unbuilt">未构建</span>';
+                }
                 html += '<tr style="border-bottom: 1px solid #eee;">';
-                html += '<td style="padding: 8px;">' + escapeHtml(doc.name) + ' (' + size + 'KB)</td>';
+                html += '<td style="padding: 8px;">' + badge + escapeHtml(doc.name) + ' (' + size + 'KB)</td>';
                 html += '<td style="padding: 8px; text-align: right;"><button onclick="deleteDocument(\'' + encodeURIComponent(doc.path) + '\')" style="background: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">删除</button></td>';
                 html += '</tr>';
             });

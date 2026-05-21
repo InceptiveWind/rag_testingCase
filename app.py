@@ -406,6 +406,35 @@ def download_case(filename: str):
         return f"下载失败: {str(e)}", 500
 
 
+def load_file_states():
+    """加载文件构建状态
+    
+    Returns:
+        dict: 文件路径 -> 状态信息的字典
+    """
+    state_file = VECTOR_STORE_DIR / ".file_state.json"
+    if not state_file.exists():
+        return {}
+    try:
+        import json
+        with open(state_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def get_supported_document_extensions():
+    """获取支持的文档扩展名列表（不依赖完整 langchain 导入）
+    
+    Returns:
+        list: 扩展名列表，包括点前缀，如 ['.pdf', '.docx']
+    """
+    return [
+        '.txt', '.md', '.markdown', '.pdf', '.docx', '.xlsx', '.xls', '.pptx', '.ppt', 
+        '.csv', '.json', '.xmind', '.vsdx'
+    ]
+
+
 @app.route('/status')
 def status():
     """获取系统状态
@@ -418,21 +447,18 @@ def status():
         vector_dir = Path(VECTOR_STORE_DIR)
         has_vectorstore = vector_dir.exists() and any(vector_dir.iterdir())
 
-        # 检查文档
+        # 检查文档 - 只统计支持类型的文件
         docs_dir = Path(KNOWLEDGE_BASE_DIR)
-        doc_count = len(list(docs_dir.rglob('*.*'))) if docs_dir.exists() else 0
+        supported_exts = get_supported_document_extensions()
+        supported_files = []
+        if docs_dir.exists():
+            for ext in supported_exts:
+                supported_files.extend(docs_dir.rglob(f'*{ext}'))
+        doc_count = len(supported_files)
 
-        # 检查已入库的文档数量（从增量构建状态文件读取）
-        vector_doc_count = 0
-        state_file = VECTOR_STORE_DIR / ".file_state.json"
-        if state_file.exists():
-            try:
-                import json
-                with open(state_file, 'r', encoding='utf-8') as f:
-                    file_states = json.load(f)
-                    vector_doc_count = len(file_states)
-            except Exception:
-                pass
+        # 检查已入库的文档数量
+        file_states = load_file_states()
+        vector_doc_count = len(file_states)
 
         # 判断构建状态
         if vector_doc_count == 0:
@@ -578,7 +604,7 @@ def list_documents():
     """列出知识库中的文档
     
     Returns:
-        JSON 响应，包含文档列表
+        JSON 响应，包含文档列表和每个文件的构建状态
     """
     try:
         docs_dir = Path(KNOWLEDGE_BASE_DIR)
@@ -586,14 +612,26 @@ def list_documents():
         if not docs_dir.exists():
             return jsonify({'status': 'success', 'documents': []})
 
+        # 加载已构建文件状态
+        file_states = load_file_states()
+        supported_exts = get_supported_document_extensions()
+
         documents: List[Dict[str, Any]] = []
         for f in docs_dir.rglob('*'):
             if f.is_file():
+                # 检查是否是支持的文档类型
+                ext = f.suffix.lower()
+                is_supported = ext in supported_exts
+                file_key = str(f.resolve())
+                is_built = file_key in file_states
+                
                 documents.append({
                     'name': f.name,
                     'path': str(f.relative_to(docs_dir)),
                     'size': f.stat().st_size,
-                    'modified': f.stat().st_mtime
+                    'modified': f.stat().st_mtime,
+                    'is_supported': is_supported,
+                    'is_built': is_built
                 })
 
         # 按修改时间排序
