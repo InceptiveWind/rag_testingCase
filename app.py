@@ -287,7 +287,8 @@ def generate():
             return create_error_response('无效的请求数据')
 
         query = data.get('query', '').strip()
-        num_cases = int(data.get('num_cases', 10))
+        raw_num = data.get('num_cases')
+        num_cases = int(raw_num) if raw_num is not None and str(raw_num).strip() else None
         version = data.get('version', '').strip()
 
         print(f"query: {query}, num_cases: {num_cases}, version: {version}")

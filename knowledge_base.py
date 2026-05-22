@@ -320,13 +320,13 @@ class KnowledgeBase:
 
             print("所有缓存已清除")
 
-    def query(self, query_text: str, return_context: bool = True, num_cases: int = 10, examples: str = None, version: str = None):
+    def query(self, query_text: str, return_context: bool = True, num_cases: int = None, examples: str = None, version: str = None):
         """查询并生成测试用例
 
         Args:
             query_text: 查询文本
             return_context: 是否打印检索到的文档
-            num_cases: 生成的测试用例数量
+            num_cases: 生成的测试用例数量，为None时由LLM自动评估
             examples: 用例示例，为None时从配置文件读取
             version: 可选，版本过滤，支持模糊输入（如"最新"、"第二新"、"前3个"、文件名等）
         """
@@ -343,6 +343,10 @@ class KnowledgeBase:
 
         if return_context:
             self.retriever.print_retrieved_docs(context_docs)
+
+        # 用户未指定数量时，让LLM自动评估
+        if num_cases is None:
+            num_cases = self.test_generator.estimate_case_count(query_text, context_docs)
 
         # 生成测试用例（支持批量）
         batch_size = min(num_cases, 36)
@@ -456,13 +460,13 @@ class KnowledgeBase:
             return self.config.get('examples', EXAMPLES)
         return examples
 
-    def query_with_rewrite(self, query_text: str, return_context: bool = True, num_cases: int = 10, examples: str = None, version: str = None):
+    def query_with_rewrite(self, query_text: str, return_context: bool = True, num_cases: int = None, examples: str = None, version: str = None):
         """使用查询改写进行检索
 
         Args:
             query_text: 查询文本
             return_context: 是否打印检索到的文档
-            num_cases: 生成的测试用例数量
+            num_cases: 生成的测试用例数量，为None时由LLM自动评估
             examples: 用例示例，为None时从配置文件读取
             version: 可选，版本过滤，支持模糊输入：
                 - 版本号：如 "20260318_123000"
@@ -524,6 +528,10 @@ class KnowledgeBase:
 
         if return_context:
             self.retriever.print_retrieved_docs(context_docs)
+
+        # 用户未指定数量时，让LLM自动评估
+        if num_cases is None:
+            num_cases = self.test_generator.estimate_case_count(query_text, context_docs)
 
         result = self.test_generator.generate(query_text, context_docs, num_cases=num_cases, examples=examples)
         filepath = self.test_generator.save_to_excel(result)

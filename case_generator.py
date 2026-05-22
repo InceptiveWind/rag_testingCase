@@ -28,6 +28,35 @@ class TestCaseGenerator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def estimate_case_count(self, query: str, context_docs: List[Document]) -> int:
+        context = "\n\n".join([
+            f"文档{i + 1}:\n{doc.page_content[:1500]}"
+            for i, doc in enumerate(context_docs[:5])
+        ])
+
+        prompt = (
+            "[任务]\n"
+            "分析以下需求与知识库内容，评估需要多少个测试用例才能合理覆盖测试\n"
+            "（综合考虑：主流程、边界条件、异常场景、关联系统交互等）。\n\n"
+            "[输出要求]\n"
+            "- 只输出一个整数数字，不要任何其他文本、标点或解释。\n\n"
+            f"需求：{query}\n\n"
+            f"知识库内容：\n{context}\n\n"
+            "需要多少个测试用例？（只输出数字）"
+        )
+
+        try:
+            response = self.llm_provider.chat(prompt)
+            match = re.search(r'\d+', response)
+            if match:
+                count = int(match.group())
+                print(f"LLM评估用例数量: {count}")
+                return count
+        except Exception as e:
+            print(f"LLM评估用例数量失败: {e}，使用默认值10")
+
+        return 10
+
     def _build_cases_prompt(
             self,
             *,
